@@ -6507,14 +6507,15 @@ class GameView(discord.ui.View):
     @discord.ui.button(label="Shoot Self", style=discord.ButtonStyle.danger)
     async def shoot_self(self, interaction: discord.Interaction, button: discord.ui.Button):
         global operation_active
-        operation_active = True
         if not operation_active:
+            operation_active = True
+
             await interaction.followup.send("Buckshot Roulette command halted by stop command.", ephemeral=False)
             return
         if interaction.user.id != self.game_state["turn"]:
             await interaction.response.send_message("It's not your turn.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         outcome = self._resolve_shot()
         if outcome is None:
             await self._end_round(interaction)
@@ -6543,9 +6544,12 @@ class GameView(discord.ui.View):
         if interaction.user.id != self.game_state["turn"]:
             await interaction.response.send_message("It's not your turn.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         opponent_id = int(self.challenged.id) if interaction.user.id == self.challenger.id else int(self.challenger.id)
         outcome = self._resolve_shot()
+        if outcome is None:
+            await self._end_round(interaction)
+            return
         if outcome == "loaded":
             damage = 1
             self.game_state.setdefault("damage_multiplier", {})
@@ -6602,9 +6606,7 @@ class GameView(discord.ui.View):
 
         health_challenger = self.game_state["health"].get(str(self.challenger.id), 0)
         health_challenged = self.game_state["health"].get(str(self.challenged.id), 0)
-        if self.game_state["gun_config"]["current_index"] >= len(self.game_state["gun_config"]["chamber"]):
-            await self._end_round(interaction)
-            return
+        
 
         if health_challenger <= 0 or health_challenged <= 0:
             winner_id = self.challenged.id if health_challenger <= 0 else self.challenger.id
@@ -6616,6 +6618,10 @@ class GameView(discord.ui.View):
             await interaction.followup.send(f"Game over! {winner_member.display_name} wins!", ephemeral=False)
             active_games.pop(self.game_id, None)
             return
+        
+        if self.game_state["gun_config"]["current_index"] >= len(self.game_state["gun_config"]["chamber"]):
+                    await self._end_round(interaction)
+                    return
 
         #await update_game_in_db(self.game_id, self.game_state)
         board_embed = await create_game_board_embed(interaction.guild, self.game_state)
@@ -6634,8 +6640,8 @@ class GameView(discord.ui.View):
         #new_hand = deal_cards(hand_size)
         total_shells = self.game_state["gun_config"]["total"]
 
-        for player in [self.challenger.id, self.challenged.id]:    
-            size = calculate_hand_size(total_shells)
+        size = calculate_hand_size(total_shells)
+        for player in [self.challenger.id, self.challenged.id]:
             self.game_state["hands"][str(player)] = deal_cards(size)
 
         self.game_state.setdefault("action_log", []).append("🔁 New round started! New shells and cards dealt.")
@@ -6728,9 +6734,14 @@ async def process_card_effect(card: str, interaction: discord.Interaction, game_
         idx = game_view.game_state["gun_config"]["current_index"]
         chamber = game_view.game_state["gun_config"]["chamber"]
         if idx < len(chamber):
-            chamber.pop(idx)
+            ejected = chamber.pop(idx)
             game_view.game_state["gun_config"]["total"] -= 1
-        return f"{interaction.user.mention} used Beer to eject the current shell..."
+            if ejected:
+                game_view.game_state["gun_config"]["loaded"] -= 1
+            else:
+                game_view.game_state["gun_config"]["empty"] -= 1
+            return f"{interaction.user.mention} used Beer and ejected a **{'loaded' if ejected else 'empty'}** shell."
+        return f"{interaction.user.mention} used Beer, but the chamber was already empty."
 
     elif card == "Cigarette Pack":
         max_health = game_view.game_state["max_health"]
@@ -6852,6 +6863,7 @@ class Challenge(discord.ui.View):
             return
         self.value = True
         self.stop()
+        await interaction.response.defer()
         await interaction.message.delete()
 
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger)
@@ -6876,6 +6888,11 @@ class ColorWarView(discord.ui.View):
         game = color_wars.get(self.game_id)
         if game:
             await game["message"].edit(content="Game Over! It's a tie due to timeout!", view=None)
+            if "forfeit_message" in game:
+                try:
+                    await game["forfeit_message"].delete()
+                except Exception:
+                    pass
             color_wars.pop(self.game_id, None)
 
 class ColorWarGame:
@@ -7028,6 +7045,7 @@ class ChallengeMemory(discord.ui.View):
             return
         self.value = True
         self.stop()
+        await interaction.response.defer()
         await interaction.message.delete()
 
     @discord.ui.button(label="Reject", style=discord.ButtonStyle.danger)

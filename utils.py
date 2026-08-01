@@ -397,15 +397,12 @@ def deal_cards(hand_size=None):
     return random.choices(allowed_cards, k=hand_size)
 
 def calculate_hand_size(total):
-    if total <= 4:
-        return random.randint(1, 2)
-    elif total <= 7:
-        return random.randint(2, 3)
-    else:
-        return random.randint(3, 4)
+    base = total * 0.4
+    hand_size = round(base) + random.choice([-1, 0, 0, 1])
+    return max(1, min(5, hand_size))
 
 def create_initial_game_state(challenger_id, challenged_id):
-    max_health = random.randint(4, 10)
+    max_health = random.randint(4, 8)
     gun_config = create_gun_config()
     hand_size = calculate_hand_size(gun_config["total"])
     return {
@@ -413,7 +410,7 @@ def create_initial_game_state(challenger_id, challenged_id):
         "challenged": str(challenged_id),
         "max_health": max_health,
         "health": {str(challenger_id): max_health, str(challenged_id): max_health},
-        "gun_config": create_gun_config(),
+        "gun_config": gun_config,
         "hands": {str(challenger_id): deal_cards(hand_size), str(challenged_id): deal_cards(hand_size)},
         "turn": random.choice([challenger_id, challenged_id]),
         "round": 1,
@@ -509,6 +506,11 @@ class ColorWarButton(discord.ui.Button):
             await interaction.followup.send("Not your turn!", ephemeral=True)
             return
 
+        if game.get("processing"):
+            await interaction.followup.send("Still resolving the last move, hang on!", ephemeral=True)
+            return
+        game["processing"] = True
+
         player_color = "red" if interaction.user.id == game["player1"] else "blue"
         grid = game["grid"]
         try:
@@ -543,12 +545,32 @@ class ColorWarButton(discord.ui.Button):
 
         red_points, blue_points = update_points(game)
 
+        for item in game["view"].children:
+            if isinstance(item, ColorWarButton):
+                xi, yj = item.x, item.y
+                new_emoji = get_cell_emoji(game["grid"][xi][yj])
+                if new_emoji.startswith("<:"):
+                    parts = new_emoji.strip("<>").split(":")
+                    item.emoji = discord.PartialEmoji(name=parts[1], id=int(parts[2]))
+                else:
+                    item.emoji = new_emoji
+
         # Check win condition only if both have moved.
         if game["first_move_done"][game["player1"]] and game["first_move_done"][game["player2"]]:
             winner_color = check_win_condition(grid)
             if winner_color:
-                win_id = game["player1"] if winner_color == "red" else game["player2"]
-                await game["message"].edit(content=f"Game Over! **<@{win_id}> wins!**", view=None)
+                for item in game["view"].children:
+                    item.disabled = True
+                if winner_color == "draw":
+                    await game["message"].edit(content="Game Over! Mutual annihilation — it's a **draw**!", view=game["view"])
+                else:
+                    win_id = game["player1"] if winner_color == "red" else game["player2"]
+                    await game["message"].edit(content=f"Game Over! **<@{win_id}> wins!**", view=game["view"])
+                if "forfeit_message" in game:
+                    try:
+                        await game["forfeit_message"].delete()
+                    except Exception:
+                        pass
                 color_wars.pop(self.game_id, None)
                 return
 
@@ -569,6 +591,7 @@ class ColorWarButton(discord.ui.Button):
 
 
         new_content = f"**Color War Game**\n\nRed Points: **{red_points}** | Blue Points: **{blue_points}**\n\nCurrent Turn: <@{game['current_turn']}>"
+        game["processing"] = False
         await game['message'].edit(content=new_content, view=game["view"])
 
 
@@ -602,6 +625,8 @@ def get_cell_emoji(cell):
 def check_win_condition(grid):
     red_exists = any(cell is not None and cell["color"] == "red" for row in grid for cell in row)
     blue_exists = any(cell is not None and cell["color"] == "blue" for row in grid for cell in row)
+    if not red_exists and not blue_exists:
+        return "draw"
     if not red_exists:
         return "blue"
     if not blue_exists:
