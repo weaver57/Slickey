@@ -1,0 +1,10 @@
+discord.py>=2.0.0
+aiosqlite>=0.17.0
+asyncpg>=0.27.0
+rapidfuzz>=2.13.7
+Pillow>=9.0.0
+requests>=2.28.0
+python-dotenv>=1.0.0
+flask>=2.0.0       # you can pin a version if you want
+anime-api         # or whatever the correct PyPI name is
+psutil>=5.9.0
