@@ -32,7 +32,6 @@ chota_wigu_bot_token = os.getenv("BOT_TOKEN_1")
 bada_wigu_bot_token = os.getenv("BOT_TOKEN_2")
 
 
-prefixx = None
 #prefix_cache = TTLCache(maxsize=1024, ttl=600)  # 10-minute cache
 
 async def get_prefix(bot, message):
@@ -68,6 +67,26 @@ async def get_prefix(bot, message):
     #prefix_cache[key] = "w."
     #print("Inserted cached memory here.")
     return "w."
+
+async def resolve_prefix(guild_id: int | None, user_id: int) -> str:
+    """Same lookup priority as get_prefix(), but usable from an Interaction (no Message object)."""
+    if guild_id is None:
+        return "w."
+    if utils.db_pool is None or utils.db_pool._closed:
+        return "w."
+    try:
+        async with utils.db_pool.acquire(timeout=5.0) as conn:
+            user_prefix = await conn.fetchrow("SELECT prefix FROM user_prefixes WHERE user_id = $1", str(user_id))
+            if user_prefix:
+                return user_prefix["prefix"]
+            guild_prefix = await conn.fetchrow("SELECT prefix FROM server_prefixes WHERE guild_id = $1", str(guild_id))
+            if guild_prefix:
+                return guild_prefix["prefix"]
+    except Exception:
+        return "w."
+    return "w."
+
+
 
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=None)
 
@@ -7613,6 +7632,114 @@ async def lb(ctx, leaderboard_type: str = "msg"):
     await generate_leaderboard(ctx, leaderboard_type.lower(), "Today")
 
 
+
+
+
+
+
+
+
+def get_all_commands():
+    bot_commands = bot.commands
+    slash_commands = bot.tree.get_commands()
+    all_commands = list(bot_commands)
+    for sc in slash_commands:
+        if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
+            all_commands.append(sc)
+    return all_commands
+
+CATEGORY_MAP = {
+    "🛡️ Moderation": ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
+                       'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban'],
+    "🛠️ Config": ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping'],
+    "👻 Fun": ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
+               'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars',
+               'colorwars_help', 'memory', 'memory_help', 'waifu', 'wtags'],
+    "💰 Economy": ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
+                   'give', 'tip', 'tribute'],
+    "🤖 User": ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
+                'sljail', 'slunjail', 'slkick', 'slmute', 'slunmute', 'slsetnick', 'slrole',
+                'slwhip', 'slrelease', 'slrefund', 'escape'],
+}
+
+def categorize_commands(all_commands):
+    categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
+    for command in all_commands:
+        placed = False
+        for cat, names in CATEGORY_MAP.items():
+            if command.name in names:
+                categories[cat].append(command)
+                placed = True
+                break
+        if not placed and command.name in ACTIONS:
+            categories["🎬 Actions"].append(command)
+    return categories
+
+def _thumbnail_file():
+    try:
+        return discord.File("thumbnail.png", filename="thumbnail.png")
+    except (FileNotFoundError, OSError):
+        return None
+
+def build_category_embeds(categories, syntax_hint, use_thumbnail):
+    embeds = {}
+    for category, command_list in categories.items():
+        if not command_list:
+            continue
+        commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
+        embed = discord.Embed(
+            title=f"{category} Commands",
+            description=f"**🔎 To learn more about a specific command, type:** `{syntax_hint}`\n\n{commands_display}",
+            color=discord.Color.random(),
+        )
+        if use_thumbnail:
+            embed.set_thumbnail(url="attachment://thumbnail.png")
+        embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
+        embeds[category] = embed
+    return embeds
+
+def build_command_embed(command, categories, fallback_prefix):
+    command_help = getattr(command, "help", None) or getattr(command, "description", None) or "No description available."
+
+    if "**Syntax**:" in command_help:
+        description, syntax = command_help.split("**Syntax**:", 1)
+    else:
+        description, syntax = command_help, None
+    description = description.strip() if description else "No description available."
+
+    is_slash = isinstance(command, (discord.app_commands.Command, discord.app_commands.Group))
+    cmd_prefix = "/" if is_slash else fallback_prefix
+    syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
+
+    embed = discord.Embed(
+        title=f"🔍 Command: `{cmd_prefix}{command.name}`",
+        description=description,
+        color=discord.Color.green(),
+    )
+    embed.add_field(
+        name="📂 Category",
+        value=next((k for k, v in categories.items() if command in v), "Unknown"),
+        inline=False,
+    )
+    embed.add_field(name="📖 Syntax", value=syntax, inline=False)
+
+    cd = None
+    try:
+        if hasattr(command, "_buckets"):
+            cooldown_obj = command._buckets._cooldown
+            if cooldown_obj:
+                cd = f"{cooldown_obj.rate} use(s) per {cooldown_obj.per}s"
+        elif hasattr(command, "cooldown") and command.cooldown:
+            cobj = command.cooldown
+            cd = f"{cobj.rate} use(s) per {cobj.per}s"
+    except Exception:
+        cd = None
+    embed.add_field(name="⏱️ Cooldown", value=cd or "None", inline=False)
+
+    aliases = getattr(command, "aliases", [])
+    embed.add_field(name="🔀 Aliases", value=", ".join(aliases) if aliases else "None", inline=False)
+    return embed
+
 @bot.command(name="help", aliases=["Help", "HELP"], help="Display all the commands organized by category.\n**Syntax**: help or help <command_name>")
 @commands.guild_only()
 async def help_command(ctx, command_name: str = None):
@@ -7621,133 +7748,42 @@ async def help_command(ctx, command_name: str = None):
         return
 
     prefix = ctx.prefix
-    global prefixx
-    prefixx = ctx.prefix
-    bot_commands = bot.commands
-    slash_commands = bot.tree.get_commands()
-    all_commands = list(bot_commands)
-    for sc in slash_commands:
-        if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
-            all_commands.append(sc)
 
-    categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
-
-    for command in all_commands:
-        if command.name in ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
-                            'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban']:
-            categories["🛡️ Moderation"].append(command)
-        elif command.name in ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping']:
-            categories["🛠️ Config"].append(command)
-        elif command.name in ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
-                              'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars', 'colorwars_help', 'memory', 'memory_help', 'waifu', 'wtags']:
-            categories["👻 Fun"].append(command)
-        elif command.name in ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
-                              'give', 'tip', 'tribute']:
-            categories["💰 Economy"].append(command)
-        elif command.name in ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
-                              'sljail', 'slunjail', 'slkick', 'slmute', 'slmute', 'slunmute', 'slsetnick', 'slrole',
-                              'slwhip', 'slrelease', 'slrefund', 'escape']:
-            categories["🤖 User"].append(command)
-        elif command.name in ACTIONS:
-            categories["🎬 Actions"].append(command)
-
+    all_commands = get_all_commands()
+    categories = categorize_commands(all_commands)
 
     if command_name:
-        command = bot.get_command(command_name)
-        if not command:
-            command = bot.tree.get_command(command_name)
+        command = bot.get_command(command_name) or bot.tree.get_command(command_name)
         if not command:
             await ctx.send(f"❌ Command `{command_name}` not found.")
             return
-
-        command_help = getattr(command, "help", None)
-        if not command_help:
-            command_help = getattr(command, "description", "No description available.")
-
-        if "**Syntax**:" in command_help:
-            description, syntax = command_help.split("**Syntax**:")
-        else:
-            description, syntax = command_help, None
-        description = description.strip() if description else "No description available."
-        cmd_prefix = "/" if isinstance(command,
-                                       (discord.app_commands.Command, discord.app_commands.Group)) else ctx.prefix
-        syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
-
-        embed = discord.Embed(
-            title=f"🔍 Command: `{cmd_prefix}{command.name}`",
-            description=description,
-            color=discord.Color.green(),)
-        
-        embed.add_field(
-            name="📂 Category",
-            value=f"{next((k for k, v in categories.items() if command in v), 'Unknown')}",
-            inline=False, )
-        
-        embed.add_field(name="📖 Syntax", value=syntax, inline=False)
-
-        try:
-            # for text commands
-            cd = None
-            if hasattr(command, "_buckets"):
-                cooldown_obj = command._buckets._cooldown
-                if cooldown_obj:
-                    cd = f"{cooldown_obj.rate} use(s) per {cooldown_obj.per}s"
-            # for slash commands
-            elif hasattr(command, "cooldown") and command.cooldown:
-                cobj = command.cooldown
-                cd = f"{cobj.rate} use(s) per {cobj.per}s"
-        except Exception:
-            cd = None
-        embed.add_field(
-            name="⏱️ Cooldown",
-            value=cd or "None",
-            inline=False
-        )
-        
-        aliases = getattr(command, "aliases", [])
-        alias_str = ", ".join(aliases) if aliases else "None"
-        embed.add_field(name="🔀 Aliases", value=alias_str, inline=False)
-
-        await ctx.send(embed=embed)
+        await ctx.send(embed=build_command_embed(command, categories, prefix))
         return
 
-    embeds = {}
-    for category, command_list in categories.items():
-        if not command_list:
-            continue
+    thumb_probe = _thumbnail_file()
+    use_thumb = thumb_probe is not None
+    embeds = build_category_embeds(categories, f"{prefix}help <command_name>", use_thumbnail=use_thumb)
+    if not embeds:
+        await ctx.send("No commands available to display.")
+        return
 
-        commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
-
-        embed = discord.Embed(title=f"{category} Commands",
-                              description=f"**🔎 To learn more about a specific command, type:** `{prefix}help <command_name>`\n\n{commands_display}",
-                              color=discord.Color.random(), )
-
-        embed.set_thumbnail(url="attachment://thumbnail.png")
-        embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
-        embeds[category] = embed
-
-    # Dropdown menu
     class CategoryDropdown(discord.ui.Select):
         def __init__(self):
             options = [
                 discord.SelectOption(label=category, description=f"View commands in the {category} category.")
-                for category in categories.keys()
+                for category in embeds.keys()
             ]
             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
-                             options=options)
+                              options=options)
 
         async def callback(self, interaction: discord.Interaction):
             if interaction.user.id != ctx.author.id:
-                await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.",
-                                                        ephemeral=True)
-                return
+                return await interaction.response.send_message(
+                    "⛔ Only the command invoker can interact with this menu.", ephemeral=True)
+            thumb = _thumbnail_file()
+            await interaction.response.edit_message(
+                embed=embeds[self.values[0]], attachments=[thumb] if thumb else [])
 
-            selected_category = self.values[0]
-            embed = embeds[selected_category]
-            file = discord.File("thumbnail.png", filename="thumbnail.png")
-            await interaction.response.edit_message(embed=embed, attachments=[file])
-
-    # View with the dropdown menu
     class HelpMenuView(discord.ui.View):
         def __init__(self, author):
             super().__init__(timeout=180)
@@ -7757,132 +7793,208 @@ async def help_command(ctx, command_name: str = None):
         async def interaction_check(self, interaction: discord.Interaction) -> bool:
             return interaction.user.id == self.author.id
 
-    initial_embed = embeds[list(categories.keys())[0]]
-    initial_file = discord.File("thumbnail.png", filename="thumbnail.png")
-    await ctx.send(embed=initial_embed, file=initial_file, view=HelpMenuView(ctx.author))
+    first_category = next(iter(embeds))
+    initial_embed = embeds[first_category]
+    if use_thumb:
+        await ctx.send(embed=initial_embed, file=thumb_probe, view=HelpMenuView(ctx.author))
+    else:
+        await ctx.send(embed=initial_embed, view=HelpMenuView(ctx.author))
+        
+        
+# @bot.command(name="help", aliases=["Help", "HELP"], help="Display all the commands organized by category.\n**Syntax**: help or help <command_name>")
+# @commands.guild_only()
+# async def help_command(ctx, command_name: str = None):
+#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "help"):
+#         await ctx.reply("You are blocked from using help command.")
+#         return
+
+#     prefix = ctx.prefix
+#     global prefixx
+#     prefixx = ctx.prefix
+#     bot_commands = bot.commands
+#     slash_commands = bot.tree.get_commands()
+#     all_commands = list(bot_commands)
+#     for sc in slash_commands:
+#         if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
+#             all_commands.append(sc)
+
+#     categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
+
+#     for command in all_commands:
+#         if command.name in ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
+#                             'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban']:
+#             categories["🛡️ Moderation"].append(command)
+#         elif command.name in ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping']:
+#             categories["🛠️ Config"].append(command)
+#         elif command.name in ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
+#                               'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars', 'colorwars_help', 'memory', 'memory_help', 'waifu', 'wtags']:
+#             categories["👻 Fun"].append(command)
+#         elif command.name in ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
+#                               'give', 'tip', 'tribute']:
+#             categories["💰 Economy"].append(command)
+#         elif command.name in ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
+#                               'sljail', 'slunjail', 'slkick', 'slmute', 'slmute', 'slunmute', 'slsetnick', 'slrole',
+#                               'slwhip', 'slrelease', 'slrefund', 'escape']:
+#             categories["🤖 User"].append(command)
+#         elif command.name in ACTIONS:
+#             categories["🎬 Actions"].append(command)
 
 
+#     if command_name:
+#         command = bot.get_command(command_name)
+#         if not command:
+#             command = bot.tree.get_command(command_name)
+#         if not command:
+#             await ctx.send(f"❌ Command `{command_name}` not found.")
+#             return
 
-@bot.tree.command(name="help",description="Display all commands organized by category.")
+#         command_help = getattr(command, "help", None)
+#         if not command_help:
+#             command_help = getattr(command, "description", "No description available.")
+
+#         if "**Syntax**:" in command_help:
+#             description, syntax = command_help.split("**Syntax**:")
+#         else:
+#             description, syntax = command_help, None
+#         description = description.strip() if description else "No description available."
+#         cmd_prefix = "/" if isinstance(command,
+#                                        (discord.app_commands.Command, discord.app_commands.Group)) else ctx.prefix
+#         syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
+
+#         embed = discord.Embed(
+#             title=f"🔍 Command: `{cmd_prefix}{command.name}`",
+#             description=description,
+#             color=discord.Color.green(),)
+        
+#         embed.add_field(
+#             name="📂 Category",
+#             value=f"{next((k for k, v in categories.items() if command in v), 'Unknown')}",
+#             inline=False, )
+        
+#         embed.add_field(name="📖 Syntax", value=syntax, inline=False)
+
+#         try:
+#             # for text commands
+#             cd = None
+#             if hasattr(command, "_buckets"):
+#                 cooldown_obj = command._buckets._cooldown
+#                 if cooldown_obj:
+#                     cd = f"{cooldown_obj.rate} use(s) per {cooldown_obj.per}s"
+#             # for slash commands
+#             elif hasattr(command, "cooldown") and command.cooldown:
+#                 cobj = command.cooldown
+#                 cd = f"{cobj.rate} use(s) per {cobj.per}s"
+#         except Exception:
+#             cd = None
+#         embed.add_field(
+#             name="⏱️ Cooldown",
+#             value=cd or "None",
+#             inline=False
+#         )
+        
+#         aliases = getattr(command, "aliases", [])
+#         alias_str = ", ".join(aliases) if aliases else "None"
+#         embed.add_field(name="🔀 Aliases", value=alias_str, inline=False)
+
+#         await ctx.send(embed=embed)
+#         return
+
+#     embeds = {}
+#     for category, command_list in categories.items():
+#         if not command_list:
+#             continue
+
+#         commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
+
+#         embed = discord.Embed(title=f"{category} Commands",
+#                               description=f"**🔎 To learn more about a specific command, type:** `{prefix}help <command_name>`\n\n{commands_display}",
+#                               color=discord.Color.random(), )
+
+#         embed.set_thumbnail(url="attachment://thumbnail.png")
+#         embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
+#         embeds[category] = embed
+
+#     # Dropdown menu
+#     class CategoryDropdown(discord.ui.Select):
+#         def __init__(self):
+#             options = [
+#                 discord.SelectOption(label=category, description=f"View commands in the {category} category.")
+#                 for category in categories.keys()
+#             ]
+#             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
+#                              options=options)
+
+#         async def callback(self, interaction: discord.Interaction):
+#             if interaction.user.id != ctx.author.id:
+#                 await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.",
+#                                                         ephemeral=True)
+#                 return
+
+#             selected_category = self.values[0]
+#             embed = embeds[selected_category]
+#             file = discord.File("thumbnail.png", filename="thumbnail.png")
+#             await interaction.response.edit_message(embed=embed, attachments=[file])
+
+#     # View with the dropdown menu
+#     class HelpMenuView(discord.ui.View):
+#         def __init__(self, author):
+#             super().__init__(timeout=180)
+#             self.author = author
+#             self.add_item(CategoryDropdown())
+
+#         async def interaction_check(self, interaction: discord.Interaction) -> bool:
+#             return interaction.user.id == self.author.id
+
+#     initial_embed = embeds[list(categories.keys())[0]]
+#     initial_file = discord.File("thumbnail.png", filename="thumbnail.png")
+#     await ctx.send(embed=initial_embed, file=initial_file, view=HelpMenuView(ctx.author))
+
+
+@bot.tree.command(name="help", description="Display all commands organized by category.")
 @discord.app_commands.guild_only()
 @discord.app_commands.describe(command_name="(Optional) The specific command to get help for")
 async def slash_help_command(interaction: discord.Interaction, command_name: str = None):
-
-    await interaction.response.send_message("In Development", ephemeral=True)
-    return
-
     if await is_command_blocked(interaction.guild.id, interaction.user.id, "help"):
         await interaction.response.send_message("You are blocked from using help command.", ephemeral=True)
         return
 
-    prefix = interaction.pref
-    bot_commands = bot.commands
-    slash_commands = bot.tree.get_commands()
-    all_commands = list(bot_commands)
-    for sc in slash_commands:
-        if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
-            all_commands.append(sc)
-
-    categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
-
-    for command in all_commands:
-        if command.name in ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
-                            'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban']:
-            categories["🛡️ Moderation"].append(command)
-        elif command.name in ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping']:
-            categories["🛠️ Config"].append(command)
-        elif command.name in ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
-                              'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars', 'colorwars_help', 'memory', 'memory_help']:
-            categories["👻 Fun"].append(command)
-        elif command.name in ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
-                              'give', 'tip', 'tribute']:
-            categories["💰 Economy"].append(command)
-        elif command.name in ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
-                              'sljail', 'slunjail', 'slkick', 'slmute', 'slmute', 'slunmute', 'slsetnick', 'slrole',
-                              'slwhip', 'slrelease', 'slrefund', 'escape']:
-            categories["🤖 User"].append(command)
-        elif command.name in ACTIONS:
-            categories["🎬 Actions"].append(command)
+    prefix = await resolve_prefix(interaction.guild_id, interaction.user.id)
+    
+    all_commands = get_all_commands()
+    categories = categorize_commands(all_commands)
 
     if command_name:
-        command = bot.get_command(command_name)
+        command = bot.get_command(command_name) or bot.tree.get_command(command_name)
         if not command:
-            command = bot.tree.get_command(command_name)
-        if not command:
-            interaction.response.send_message(f"❌ Command `{command_name}` not found.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Command `{command_name}` not found.", ephemeral=True)
             return
-
-        command_help = getattr(command, "help", None)
-        if not command_help:
-            command_help = getattr(command, "description", "No description available.")
-
-        if "**Syntax**:" in command_help:
-            description, syntax = command_help.split("**Syntax**:")
-        else:
-            description, syntax = command_help, None
-        description = description.strip() if description else "No description available."
-        cmd_prefix = "/" if isinstance(command,
-                                       (discord.app_commands.Command, discord.app_commands.Group)) else ctx.prefix
-        syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
-
-        embed = discord.Embed(
-            title=f"🔍 Command: `{cmd_prefix}{command.name}`",
-            description=description,
-            color=discord.Color.green(),)
-        
-        embed.add_field(
-            name="📂 Category",
-            value=f"{next((k for k, v in categories.items() if command in v), 'Unknown')}",
-            inline=False, )
-        
-        embed.add_field(name="📖 Syntax", value=syntax, inline=False)
-
-        # ─── Cooldown field ─────────────────────────────────────────
-        
-        
-        aliases = getattr(command, "aliases", [])
-        alias_str = ", ".join(aliases) if aliases else "None"
-        embed.add_field(name="🔀 Aliases", value=alias_str, inline=False)
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=build_command_embed(command, categories, prefix))
         return
 
-    embeds = {}
-    for category, command_list in categories.items():
-        if not command_list:
-            continue
+    thumb_probe = _thumbnail_file()
+    use_thumb = thumb_probe is not None
+    embeds = build_category_embeds(categories, "/help command_name:<command>", use_thumbnail=use_thumb)
+    if not embeds:
+        await interaction.response.send_message("No commands available to display.", ephemeral=True)
+        return
 
-        commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
-
-        embed = discord.Embed(title=f"{category} Commands",
-                              description=f"**🔎 To learn more about a specific command, type:** `{prefix}help <command_name>`\n\n{commands_display}",
-                              color=discord.Color.random(), )
-
-        embed.set_thumbnail(url="attachment://thumbnail.png")
-        embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
-        embeds[category] = embed
-
-    # Dropdown menu
     class CategoryDropdown(discord.ui.Select):
         def __init__(self):
             options = [
                 discord.SelectOption(label=category, description=f"View commands in the {category} category.")
-                for category in categories.keys()
+                for category in embeds.keys()
             ]
             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
-                             options=options)
+                              options=options)
 
         async def callback(self, interaction: discord.Interaction):
             if interaction.user.id != self.view.author.id:
-                await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.", ephemeral=True)
-                return
+                return await interaction.response.send_message(
+                    "⛔ Only the command invoker can interact with this menu.", ephemeral=True)
+            thumb = _thumbnail_file()
+            await interaction.response.edit_message(
+                embed=embeds[self.values[0]], attachments=[thumb] if thumb else [])
 
-            selected_category = self.values[0]
-            embed = embeds[selected_category]
-            file = discord.File("thumbnail.png", filename="thumbnail.png")
-            await interaction.response.edit_message(embed=embed, attachments=[file])
-
-    # View with the dropdown menu
     class HelpMenuView(discord.ui.View):
         def __init__(self, author):
             super().__init__(timeout=180)
@@ -7892,9 +8004,146 @@ async def slash_help_command(interaction: discord.Interaction, command_name: str
         async def interaction_check(self, interaction: discord.Interaction) -> bool:
             return interaction.user.id == self.author.id
 
-    initial_embed = embeds[list(categories.keys())[0]]
-    initial_file = discord.File("thumbnail.png", filename="thumbnail.png")
-    await interaction.response.send_message(embed=initial_embed, file=initial_file, view=HelpMenuView(interaction.user))
+    first_category = next(iter(embeds))
+    initial_embed = embeds[first_category]
+    if use_thumb:
+        await interaction.response.send_message(embed=initial_embed, file=thumb_probe, view=HelpMenuView(interaction.user))
+    else:
+        await interaction.response.send_message(embed=initial_embed, view=HelpMenuView(interaction.user))
+        
+        
+# @bot.tree.command(name="help",description="Display all commands organized by category.")
+# @discord.app_commands.guild_only()
+# @discord.app_commands.describe(command_name="(Optional) The specific command to get help for")
+# async def slash_help_command(interaction: discord.Interaction, command_name: str = None):
+
+#     await interaction.response.send_message("In Development", ephemeral=True)
+#     return
+
+#     if await is_command_blocked(interaction.guild.id, interaction.user.id, "help"):
+#         await interaction.response.send_message("You are blocked from using help command.", ephemeral=True)
+#         return
+
+#     prefix = interaction.pref
+#     bot_commands = bot.commands
+#     slash_commands = bot.tree.get_commands()
+#     all_commands = list(bot_commands)
+#     for sc in slash_commands:
+#         if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
+#             all_commands.append(sc)
+
+#     categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
+
+#     for command in all_commands:
+#         if command.name in ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
+#                             'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban']:
+#             categories["🛡️ Moderation"].append(command)
+#         elif command.name in ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping']:
+#             categories["🛠️ Config"].append(command)
+#         elif command.name in ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
+#                               'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars', 'colorwars_help', 'memory', 'memory_help']:
+#             categories["👻 Fun"].append(command)
+#         elif command.name in ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
+#                               'give', 'tip', 'tribute']:
+#             categories["💰 Economy"].append(command)
+#         elif command.name in ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
+#                               'sljail', 'slunjail', 'slkick', 'slmute', 'slmute', 'slunmute', 'slsetnick', 'slrole',
+#                               'slwhip', 'slrelease', 'slrefund', 'escape']:
+#             categories["🤖 User"].append(command)
+#         elif command.name in ACTIONS:
+#             categories["🎬 Actions"].append(command)
+
+#     if command_name:
+#         command = bot.get_command(command_name)
+#         if not command:
+#             command = bot.tree.get_command(command_name)
+#         if not command:
+#             interaction.response.send_message(f"❌ Command `{command_name}` not found.", ephemeral=True)
+#             return
+
+#         command_help = getattr(command, "help", None)
+#         if not command_help:
+#             command_help = getattr(command, "description", "No description available.")
+
+#         if "**Syntax**:" in command_help:
+#             description, syntax = command_help.split("**Syntax**:")
+#         else:
+#             description, syntax = command_help, None
+#         description = description.strip() if description else "No description available."
+#         cmd_prefix = "/" if isinstance(command,
+#                                        (discord.app_commands.Command, discord.app_commands.Group)) else ctx.prefix
+#         syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
+
+#         embed = discord.Embed(
+#             title=f"🔍 Command: `{cmd_prefix}{command.name}`",
+#             description=description,
+#             color=discord.Color.green(),)
+        
+#         embed.add_field(
+#             name="📂 Category",
+#             value=f"{next((k for k, v in categories.items() if command in v), 'Unknown')}",
+#             inline=False, )
+        
+#         embed.add_field(name="📖 Syntax", value=syntax, inline=False)
+
+#         # ─── Cooldown field ─────────────────────────────────────────
+        
+        
+#         aliases = getattr(command, "aliases", [])
+#         alias_str = ", ".join(aliases) if aliases else "None"
+#         embed.add_field(name="🔀 Aliases", value=alias_str, inline=False)
+
+#         await interaction.response.send_message(embed=embed)
+#         return
+
+#     embeds = {}
+#     for category, command_list in categories.items():
+#         if not command_list:
+#             continue
+
+#         commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
+
+#         embed = discord.Embed(title=f"{category} Commands",
+#                               description=f"**🔎 To learn more about a specific command, type:** `{prefix}help <command_name>`\n\n{commands_display}",
+#                               color=discord.Color.random(), )
+
+#         embed.set_thumbnail(url="attachment://thumbnail.png")
+#         embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
+#         embeds[category] = embed
+
+#     # Dropdown menu
+#     class CategoryDropdown(discord.ui.Select):
+#         def __init__(self):
+#             options = [
+#                 discord.SelectOption(label=category, description=f"View commands in the {category} category.")
+#                 for category in categories.keys()
+#             ]
+#             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
+#                              options=options)
+
+#         async def callback(self, interaction: discord.Interaction):
+#             if interaction.user.id != self.view.author.id:
+#                 await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.", ephemeral=True)
+#                 return
+
+#             selected_category = self.values[0]
+#             embed = embeds[selected_category]
+#             file = discord.File("thumbnail.png", filename="thumbnail.png")
+#             await interaction.response.edit_message(embed=embed, attachments=[file])
+
+#     # View with the dropdown menu
+#     class HelpMenuView(discord.ui.View):
+#         def __init__(self, author):
+#             super().__init__(timeout=180)
+#             self.author = author
+#             self.add_item(CategoryDropdown())
+
+#         async def interaction_check(self, interaction: discord.Interaction) -> bool:
+#             return interaction.user.id == self.author.id
+
+#     initial_embed = embeds[list(categories.keys())[0]]
+#     initial_file = discord.File("thumbnail.png", filename="thumbnail.png")
+#     await interaction.response.send_message(embed=initial_embed, file=initial_file, view=HelpMenuView(interaction.user))
 
 
 bot.run(chota_wigu_bot_token)
