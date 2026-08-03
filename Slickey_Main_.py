@@ -16,7 +16,7 @@ from discord.utils import get
 from discord.errors import Forbidden
 #import pymysql
 import asyncpg
-import utils, Slickey_Secondary_
+import utils, Slickey_Secondary_, ai_cog
 #from cachetools import TTLCache
 from dotenv import load_dotenv
 load_dotenv()
@@ -90,7 +90,8 @@ async def resolve_prefix(guild_id: int | None, user_id: int) -> str:
 
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=None)
 
-Slickey_Secondary_.setup(bot)
+
+
 
 async def block_or_command_autocomplete(interaction: discord.Interaction, current: str):
     permission_type = interaction.namespace.permission_type
@@ -8146,4 +8147,10 @@ async def slash_help_command(interaction: discord.Interaction, command_name: str
 #     await interaction.response.send_message(embed=initial_embed, file=initial_file, view=HelpMenuView(interaction.user))
 
 
-bot.run(chota_wigu_bot_token)
+async def main():
+    async with bot:
+        await bot.load_extension("ai_cog")
+        Slickey_Secondary_.setup(bot)
+        await bot.start(chota_wigu_bot_token)
+
+asyncio.run(main())
