@@ -8,3 +8,4 @@ python-dotenv>=1.0.0
 flask>=2.0.0       # you can pin a version if you want
 anime-api         # or whatever the correct PyPI name is
 psutil>=5.9.0
+google-genai==1.64.0
