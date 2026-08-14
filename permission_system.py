@@ -33,8 +33,59 @@ class PermissionDecision:
     trace: tuple[dict[str, Any], ...] = ()
 
 
-# Commands can be placed in a category without changing saved policies.  Any
-# unlisted command is still addressable as command.<its-name>.
+# Every command shipped by the bot is deliberately classified here.  Unknown
+# commands fail closed at runtime, rather than silently becoming public.
+# Values are (category, default access).  ``protected`` commands require an
+# allow policy; ``public`` commands remain available unless a rule denies them.
+COMMAND_REGISTRY: dict[str, tuple[str, str]] = {
+    # Permission and server configuration
+    **{name: ("configuration", "protected") for name in (
+        "permissions", "dashboard", "giveperm", "takeperm", "botperm", "setup",
+        "setprefix", "selfprefix", "setperm", "showperm", "debug", "getmem", "spawn",
+        "checkfunction",
+    )},
+    # Moderation and actions that affect another member or Discord role
+    **{name: ("moderation", "protected") for name in (
+        "mute", "unmute", "ban", "unban", "purge", "purgereaction", "setnick",
+        "role", "setrole", "roleroulette", "role_roulette", "modlogs", "stealsticker",
+        "sljail", "slunjail", "slmute", "slunmute", "slkick", "slsetnick", "slrole", "slwhip",
+        "massban", "massunban", "say", "echo",
+    )},
+    # Commands that alter the shared economy or server-wide games
+    **{name: ("economy", "protected") for name in (
+        "give", "tip", "tribute", "slbuy", "slrelease", "slrefund", "trade", "auction",
+        "buycmd", "spam", "stop",
+    )},
+    # Safe, self-service and informational commands
+    **{name: ("utility", "public") for name in (
+        "afk", "msgcount", "img", "av", "bn", "whois", "wallet", "balance", "chkprice",
+        "shop", "iw", "dw", "slshow", "slinfo", "help", "ping", "hello", "waifu", "wtags", "yazy", "lb", "buckshot_help", "colorwars_help",
+        "memory_help", "ai_personality", "ai_forget", "ai", 
+    )},
+    **{name: ("games", "public") for name in (
+        "beg", "daily", "escape", "fetchwater", "bakebread", "fanmaster", "minerock",
+        "shinecrown", "cf", "diceroll", "jackpot", "wish", "tower", "buckshot", "colorwars",
+        "memory",
+    )},
+}
+# Slickey_Secondary_ creates these commands dynamically from ``ACTIONS``.
+# Keeping their source list here makes the registry complete without creating a
+# circular import with utils.py (which imports this module).
+PUBLIC_ACTION_COMMANDS = (
+    "angry", "bite", "bleh", "blowkiss", "blush", "bonk", "bored", "bye", "carry", "clap",
+    "confused", "cry", "cuddle", "dance", "eat", "facepalm", "feed", "handhold", "handshake",
+    "happy", "hi", "highfive", "hug", "kick", "kill", "kiss", "lappillow", "laugh", "nod",
+    "nope", "nya", "pat", "peek", "poke", "pout", "punch", "run", "salute", "shake",
+    "shocked", "shoot", "shrug", "shy", "sip", "slap", "sleep", "smile", "smug", "spin",
+    "stare", "taunt", "teehee", "think", "thumbsup", "tickle", "wag", "wallslam", "wave",
+    "wink", "yawn", "yeet",
+)
+COMMAND_REGISTRY.update({name: ("social", "public") for name in PUBLIC_ACTION_COMMANDS})
+
+# Compatibility aliases share one stable policy key.  The values, not the
+# spellings users type, are persisted in new rules.
+COMMAND_ALIASES = {"role_roulette": "roleroulette"}
+
 COMMAND_CATEGORIES = {
     "ban": "moderation", "unban": "moderation", "mute": "moderation",
     "unmute": "moderation", "purge": "moderation", "setnick": "moderation",
@@ -46,6 +97,7 @@ COMMAND_CATEGORIES = {
     "slbuy": "economy", "auction": "economy", "cf": "economy", "diceroll": "economy",
     "jackpot": "economy", "permissions": "configuration",
 }
+COMMAND_CATEGORIES.update({name: category for name, (category, _) in COMMAND_REGISTRY.items()})
 
 # Friendly names used by the dashboard.  Keys not listed here remain fully
 # supported as ``command.<name>`` policies; every prefix and slash command is
@@ -62,6 +114,11 @@ COMMAND_CATALOG = {
     "give": ("Give currency", "economy"), "tip": ("Tip", "economy"),
     "daily": ("Daily reward", "economy"), "beg": ("Beg", "economy"),
 }
+for _command_name, (_command_category, _) in COMMAND_REGISTRY.items():
+    COMMAND_CATALOG.setdefault(
+        _command_name,
+        (_command_name.replace("_", " ").replace("-", " ").title(), _command_category),
+    )
 
 # Presets are deliberately small and editable after creation.  Administrator
 # means administrator of Slickey, not Discord's native Administrator bit.
@@ -82,11 +139,7 @@ ROLE_PRESETS: dict[str, dict[str, Any]] = {
 # They start denied to normal members; owners grant them deliberately.  Every
 # other registered command defaults to public, and any command can still be
 # explicitly allowed or denied by a rule.
-PROTECTED_COMMANDS = {
-    "permissions", "giveperm", "takeperm", "botperm", "setprefix", "selfprefix", "setnick",
-    "mute", "unmute", "ban", "unban", "purge", "purgereaction", "role", "setrole", "roleroulette",
-    "modlogs", "toggle_spawn", "spam", "stop", "massban", "massunban", "setperm", "all", "number", "date",
-}
+PROTECTED_COMMANDS = {name for name, (_, access) in COMMAND_REGISTRY.items() if access == "protected"}
 
 
 SCHEMA_SQL = """
@@ -109,6 +162,8 @@ CREATE TABLE IF NOT EXISTS bot_role_memberships (
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (guild_id, role_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_bot_role_memberships_user
+    ON bot_role_memberships (guild_id, user_id);
 
 CREATE TABLE IF NOT EXISTS bot_permission_rules (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -162,16 +217,26 @@ async def initialize_permission_system(pool) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(SCHEMA_SQL)
+            # Normalise policy keys introduced before canonical command aliases
+            # existed.  This is idempotent and keeps existing real-server rules
+            # effective after a command spelling is corrected.
+            for old_name, canonical_name in COMMAND_ALIASES.items():
+                await conn.execute(
+                    "UPDATE bot_permission_rules SET permission_key = $1 WHERE permission_key = $2",
+                    f"command.{canonical_name}", f"command.{old_name}",
+                )
             # Import existing data once.  The old tables are never consulted by
             # policy evaluation; this is a safe, reversible migration path.
             migrated = await conn.fetchval("SELECT 1 FROM bot_permission_migrations WHERE name = 'legacy-v1'")
             if migrated:
                 return
-            has_legacy = await conn.fetchval("SELECT to_regclass('public.roles') IS NOT NULL")
-            if not has_legacy:
+            has_roles = await conn.fetchval("SELECT to_regclass('public.roles') IS NOT NULL")
+            has_command_permissions = await conn.fetchval("SELECT to_regclass('public.command_permissions') IS NOT NULL")
+            has_blocked_commands = await conn.fetchval("SELECT to_regclass('public.blocked_commands') IS NOT NULL")
+            if not any((has_roles, has_command_permissions, has_blocked_commands)):
                 await conn.execute("INSERT INTO bot_permission_migrations (name) VALUES ('legacy-v1')")
                 return
-            legacy_rows = await conn.fetch("SELECT guild_id, user_id, role, level FROM roles WHERE role IN ('moderator', 'admin', 'authorized')")
+            legacy_rows = await conn.fetch("SELECT guild_id, user_id, role, level FROM roles WHERE role IN ('moderator', 'admin', 'authorized')") if has_roles else ()
             for row in legacy_rows:
                 role_id = await conn.fetchval(
                     """INSERT INTO bot_permission_roles (guild_id, name, description, rank)
@@ -185,19 +250,21 @@ async def initialize_permission_system(pool) -> None:
                        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
                     row["guild_id"], role_id, row["user_id"],
                 )
-            for row in await conn.fetch("SELECT guild_id, user_id, command_name FROM command_permissions"):
+            command_permissions = await conn.fetch("SELECT guild_id, user_id, command_name FROM command_permissions") if has_command_permissions else ()
+            for row in command_permissions:
                 await conn.execute(
                     """INSERT INTO bot_permission_rules
                        (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
                        VALUES ($1, 'user', $2, $3, 'guild', NULL, 'allow', NULL)""",
-                    row["guild_id"], row["user_id"], f"command.{row['command_name'].lower()}",
+                    row["guild_id"], row["user_id"], f"command.{canonical_command_name(row['command_name'])}",
                 )
-            for row in await conn.fetch("SELECT guild_id, user_id, command_name FROM blocked_commands"):
+            blocked_commands = await conn.fetch("SELECT guild_id, user_id, command_name FROM blocked_commands") if has_blocked_commands else ()
+            for row in blocked_commands:
                 await conn.execute(
                     """INSERT INTO bot_permission_rules
                        (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
                        VALUES ($1, 'user', $2, $3, 'guild', NULL, 'deny', NULL)""",
-                    row["guild_id"], row["user_id"], f"command.{row['command_name'].lower()}",
+                    row["guild_id"], row["user_id"], f"command.{canonical_command_name(row['command_name'])}",
                 )
             await conn.execute("INSERT INTO bot_permission_migrations (name) VALUES ('legacy-v1')")
 
@@ -213,24 +280,24 @@ async def sync_command_catalog(pool, bot: commands.Bot) -> set[str]:
             continue
         path = command.qualified_name.lower()
         name = command.name.lower()
-        known = name in COMMAND_CATEGORIES or name in PROTECTED_COMMANDS
-        category = COMMAND_CATEGORIES.get(name, "general")
-        access = "protected" if name in PROTECTED_COMMANDS or not known else "public"
+        canonical = canonical_command_name(name)
+        known = canonical in COMMAND_REGISTRY
+        category, access = COMMAND_REGISTRY.get(canonical, ("unclassified", "protected"))
         if not known:
             review_required.add(name)
-        entries[f"prefix:{path}"] = (f"command.{name}", command.name.replace("_", " ").title(), command.help or command.description or "", category, access)
+        entries[f"prefix:{path}"] = (f"command.{canonical}", command.name.replace("_", " ").title(), command.help or command.description or "", category, access)
     for command in bot.tree.walk_commands():
         if isinstance(command, app_commands.Group):
             continue
         path = command.qualified_name.lower()
         name = path.split()[-1]
         root = path.split()[0]
-        known = root in COMMAND_CATEGORIES or name in COMMAND_CATEGORIES or root in PROTECTED_COMMANDS or name in PROTECTED_COMMANDS
-        category = COMMAND_CATEGORIES.get(root, COMMAND_CATEGORIES.get(name, "general"))
-        access = "protected" if root in PROTECTED_COMMANDS or name in PROTECTED_COMMANDS or not known else "public"
+        canonical = canonical_command_name(root)
+        known = canonical in COMMAND_REGISTRY
+        category, access = COMMAND_REGISTRY.get(canonical, ("unclassified", "protected"))
         if not known:
             review_required.add(root)
-        entries[f"slash:{path}"] = (f"command.{root}", path.replace("_", " ").title(), command.description or "", category, access)
+        entries[f"slash:{path}"] = (f"command.{canonical}", path.replace("_", " ").title(), command.description or "", category, access)
     async with pool.acquire() as conn:
         for path, (permission_key, label, description, category, access) in entries.items():
             await conn.execute(
@@ -271,14 +338,20 @@ async def create_preset(pool, *, guild_id: int, preset_key: str, actor_id: int) 
     return role_id
 
 
+def canonical_command_name(command_name: str) -> str:
+    """Return the persisted root command key for prefix and slash commands."""
+    name = command_name.lower().strip().replace("/", "").split()[0]
+    return COMMAND_ALIASES.get(name, name)
+
+
 def command_keys(command_name: str, category: Optional[str] = None) -> tuple[str, ...]:
-    name = command_name.lower().strip().replace("/", "")
+    name = canonical_command_name(command_name)
     category = category or COMMAND_CATEGORIES.get(name, "general")
     return (f"command.{name}", f"category.{category}", "command.*", "category.*", "*")
 
 
 def default_allowed(command_name: str) -> bool:
-    return command_name.lower().strip().replace("/", "") not in PROTECTED_COMMANDS
+    return COMMAND_REGISTRY.get(canonical_command_name(command_name), ("unclassified", "protected"))[1] == "public"
 
 
 def _scope_candidates(channel_id: Optional[int], category_id: Optional[int]) -> tuple[tuple[str, Optional[int]], ...]:
@@ -385,15 +458,13 @@ async def actor_can_delegate_preset(pool, *, guild_id: int, user_id: int, guild_
 async def permission_key_is_registered(pool, permission_key: str) -> bool:
     """Allow only catalogue-backed command keys plus intentional policy wildcards."""
     key = permission_key.lower().strip()
-    if key in {"*", "command.*", "category.*", "command.dashboard"}:
+    if key in {"*", "command.*", "category.*"}:
         return True
     if key.startswith("category."):
         return key.removeprefix("category.") in set(COMMAND_CATEGORIES.values())
     if not key.startswith("command."):
         return False
-    return bool(await pool.fetchval(
-        "SELECT 1 FROM bot_command_catalog WHERE permission_key = $1 LIMIT 1", key
-    ))
+    return canonical_command_name(key.removeprefix("command.")) in COMMAND_REGISTRY
 
 
 async def effective_rank(pool, guild_id: int, user_id: int) -> int:
@@ -684,10 +755,12 @@ def install(bot: commands.Bot, pool_getter) -> None:
     async def prefix_check(ctx: commands.Context) -> bool:
         if ctx.guild is None or ctx.command is None:
             return True
+        command_path = getattr(ctx.command, "qualified_name", ctx.command.name)
+        command_name = canonical_command_name(command_path)
         decision = await evaluate(
             pool_getter(), guild_id=ctx.guild.id, user_id=ctx.author.id, guild_owner_id=ctx.guild.owner_id,
-            command_name=ctx.command.name, channel_id=getattr(ctx.channel, "id", None), category_id=getattr(ctx.channel, "category_id", None),
-            strict_unclassified=ctx.command.name.lower() in getattr(bot, "_slickey_unclassified_commands", set()),
+            command_name=command_name, channel_id=getattr(ctx.channel, "id", None), category_id=getattr(ctx.channel, "category_id", None),
+            strict_unclassified=command_name in getattr(bot, "_slickey_unclassified_commands", set()),
         )
         if decision.allowed:
             return True
@@ -697,11 +770,13 @@ def install(bot: commands.Bot, pool_getter) -> None:
     async def slash_check(interaction: discord.Interaction) -> bool:
         if interaction.guild is None or interaction.command is None:
             return True
+        command_path = getattr(interaction.command, "qualified_name", interaction.command.name)
+        command_name = canonical_command_name(command_path)
         decision = await evaluate(
             pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id, guild_owner_id=interaction.guild.owner_id,
-            command_name=interaction.command.name, channel_id=getattr(interaction.channel, "id", None),
+            command_name=command_name, channel_id=getattr(interaction.channel, "id", None),
             category_id=getattr(interaction.channel, "category_id", None),
-            strict_unclassified=interaction.command.name.lower() in getattr(bot, "_slickey_unclassified_commands", set()),
+            strict_unclassified=command_name in getattr(bot, "_slickey_unclassified_commands", set()),
         )
         if decision.allowed:
             return True

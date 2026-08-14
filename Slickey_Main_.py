@@ -8179,6 +8179,6 @@ async def main():
         await bot.load_extension("ai_cog")
         await bot.add_cog(permission_system.PermissionsCog(bot, lambda: utils.db_pool))
         Slickey_Secondary_.setup(bot)
-        await bot.start(chota_wigu_bot_token)
+        await bot.start(bada_wigu_bot_token)
 
 asyncio.run(main())

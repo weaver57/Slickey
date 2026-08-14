@@ -38,7 +38,11 @@ CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET")
 REDIRECT_URI = os.environ.get("DASHBOARD_REDIRECT_URI", "http://localhost:5173/auth/callback")
 FRONTEND_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "http://localhost:5173")
 COOKIE_SECURE = os.environ.get("DASHBOARD_COOKIE_SECURE", "false").lower() == "true"
-BOT_TOKEN = os.environ.get("BOT_TOKEN_1") or os.environ.get("BOT_TOKEN_2")
+# The main bot starts with BOT_TOKEN_2.  The dashboard must use that same bot
+# identity when asking Discord about guilds, channels, owners, and members.
+# DASHBOARD_BOT_TOKEN remains available for deployments that intentionally use
+# a different dashboard-capable bot.
+BOT_TOKEN = os.environ.get("BOT_TOKEN_2") or os.environ.get("BOT_TOKEN_1")
 CSRF_COOKIE = "slickey_csrf"
 
 
@@ -101,7 +105,7 @@ async def health(request: Request):
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    rank: int = 0
+    rank: int = Field(default=0, ge=-100_000, le=100_000)
 
 
 class RoleAssignment(BaseModel):
@@ -111,7 +115,7 @@ class RoleAssignment(BaseModel):
 class RoleUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    rank: int = 0
+    rank: int = Field(default=0, ge=-100_000, le=100_000)
 
 
 class RuleCreate(BaseModel):
@@ -156,7 +160,12 @@ async def _can_open_guild(request: Request, session: DashboardSession, guild_id:
     if not guild:
         raise HTTPException(403, "You are not a member of this Discord server.")
     user_id = int(session.user["id"])
-    if user_id == BOT_CREATOR_ID or guild["owner"]:
+    if user_id == BOT_CREATOR_ID:
+        return guild
+    await _require_live_membership(guild_id, user_id)
+    # OAuth's guild-owner bit is a login-time snapshot.  Ownership can change,
+    # so it must never grant dashboard access by itself.
+    if await _live_guild_owner_id(request, guild_id) == user_id:
         return guild
     decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=user_id, guild_owner_id=None,
                               command_name="dashboard")
@@ -167,9 +176,9 @@ async def _can_open_guild(request: Request, session: DashboardSession, guild_id:
 
 async def _require_below_rank(request: Request, session: DashboardSession, guild_id: int, target_rank: int) -> None:
     """Owners/creator are unrestricted; delegates manage only lower ranks."""
-    guild = await _can_open_guild(request, session, guild_id)
+    await _can_open_guild(request, session, guild_id)
     user_id = int(session.user["id"])
-    if is_superuser(user_id, user_id if guild["owner"] else None):
+    if user_id == BOT_CREATOR_ID or await _live_guild_owner_id(request, guild_id) == user_id:
         return
     actor_rank = await effective_rank(request.app.state.pool, guild_id, user_id)
     if actor_rank <= target_rank:
@@ -186,9 +195,28 @@ async def _discord_bot_get(path: str) -> Any:
         if response.status_code == 403:
             raise HTTPException(403, "The bot lacks access to this server's channels or members. Give it View Channels permission; member lookup also requires the Guild Members intent.")
         if response.status_code == 404:
+            if "/members" in path:
+                raise HTTPException(
+                    503,
+                    "Discord did not expose this server's member list to the dashboard bot. "
+                    "This does not mean the bot is absent (channel access may still work). "
+                    "Confirm Server Members Intent is enabled for the application that owns BOT_TOKEN_2, "
+                    "then restart the bot and dashboard API.",
+                )
             raise HTTPException(404, "The bot cannot find that server.")
         response.raise_for_status()
         return response.json()
+
+
+async def _live_guild_owner_id(request: Request, guild_id: int) -> int:
+    """Read the present Discord owner once per request, never from OAuth data."""
+    cache = getattr(request.state, "guild_owner_ids", None)
+    if cache is None:
+        cache = request.state.guild_owner_ids = {}
+    if guild_id not in cache:
+        guild = await _discord_bot_get(f"/guilds/{guild_id}")
+        cache[guild_id] = int(guild["owner_id"])
+    return cache[guild_id]
 
 
 async def _validate_rule_targets(guild_id: int, body: RuleCreate) -> None:
@@ -200,15 +228,26 @@ async def _validate_rule_targets(guild_id: int, body: RuleCreate) -> None:
         if not channel or channel["type"] != expected_type:
             raise HTTPException(422, "The selected channel/category does not belong to this server or has the wrong type.")
     if body.subject_type == "user":
-        members = await _discord_bot_get(f"/guilds/{guild_id}/members?limit=1000")
-        if not any(int(item["user"]["id"]) == body.subject_id for item in members):
-            raise HTTPException(422, "The selected user is not a current server member.")
+        await _validate_member(guild_id, body.subject_id)
 
 
 async def _validate_member(guild_id: int, user_id: int) -> None:
-    members = await _discord_bot_get(f"/guilds/{guild_id}/members?limit=1000")
-    if not any(int(item["user"]["id"]) == user_id for item in members):
-        raise HTTPException(422, "The selected user is not a current server member.")
+    try:
+        await _discord_bot_get(f"/guilds/{guild_id}/members/{user_id}")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(422, "The selected user is not a current server member.") from exc
+        raise
+
+
+async def _require_live_membership(guild_id: int, user_id: int) -> None:
+    """Session guild lists are stale after a member leaves; Discord is authoritative."""
+    try:
+        await _discord_bot_get(f"/guilds/{guild_id}/members/{user_id}")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(403, "You are no longer a member of this Discord server. Sign in again after rejoining.") from exc
+        raise
 
 
 async def _rule_rank_guard(request: Request, session: DashboardSession, guild_id: int, subject_type: str, subject_id: int | None) -> None:
@@ -223,9 +262,11 @@ async def _rule_rank_guard(request: Request, session: DashboardSession, guild_id
 
 
 async def _require_manager(request: Request, session: DashboardSession, guild_id: int) -> None:
-    guild = await _can_open_guild(request, session, guild_id)
+    await _can_open_guild(request, session, guild_id)
     user_id = int(session.user["id"])
-    if is_superuser(user_id, user_id if guild["owner"] else None):
+    if user_id == BOT_CREATOR_ID:
+        return
+    if await _live_guild_owner_id(request, guild_id) == user_id:
         return
     decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=user_id, guild_owner_id=None,
                               command_name="permissions")
@@ -238,6 +279,13 @@ async def _audit(request: Request, guild_id: int, actor_id: int, action: str, pa
         "INSERT INTO bot_permission_audit_log (guild_id, actor_id, action, payload) VALUES ($1, $2, $3, $4::jsonb)",
         guild_id, actor_id, action, __import__("json").dumps(payload),
     )
+
+
+def _clean_role_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(422, "Role name cannot be blank.")
+    return name
 
 
 @app.get("/api/auth/login")
@@ -345,9 +393,12 @@ async def roles(guild_id: int, request: Request, slickey_session: str | None = C
 async def create_role(guild_id: int, body: RoleCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
     session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
     await _require_below_rank(request, session, guild_id, body.rank)
-    role_id = await request.app.state.pool.fetchval(
-        "INSERT INTO bot_permission_roles (guild_id,name,description,rank,created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id",
-        guild_id, body.name.strip(), body.description, body.rank, int(session.user["id"]))
+    try:
+        role_id = await request.app.state.pool.fetchval(
+            "INSERT INTO bot_permission_roles (guild_id,name,description,rank,created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            guild_id, _clean_role_name(body.name), body.description, body.rank, int(session.user["id"]))
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(409, "A custom role with that name already exists in this server.") from exc
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.role.create", {"role_id": role_id})
     return {"id": role_id}
 
@@ -358,7 +409,6 @@ async def delete_role(guild_id: int, role_id: int, request: Request, slickey_ses
     rank = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if rank is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, rank)
-    await _validate_member(guild_id, body.user_id)
     async with request.app.state.pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("DELETE FROM bot_permission_rules WHERE guild_id=$1 AND subject_type='role' AND subject_id=$2", guild_id, role_id)
@@ -374,6 +424,7 @@ async def assign_role(guild_id: int, role_id: int, body: RoleAssignment, request
     rank = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if rank is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, rank)
+    await _validate_member(guild_id, body.user_id)
     await request.app.state.pool.execute("INSERT INTO bot_role_memberships (guild_id,role_id,user_id,assigned_by) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", guild_id, role_id, body.user_id, int(session.user["id"]))
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.role.assign", {"role_id": role_id, "user_id": body.user_id})
     return {"ok": True}
@@ -395,7 +446,10 @@ async def update_role(guild_id: int, role_id: int, body: RoleUpdate, request: Re
     current = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if current is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, max(current, body.rank))
-    await request.app.state.pool.execute("UPDATE bot_permission_roles SET name=$3,description=$4,rank=$5 WHERE guild_id=$1 AND id=$2", guild_id, role_id, body.name.strip(), body.description, body.rank)
+    try:
+        await request.app.state.pool.execute("UPDATE bot_permission_roles SET name=$3,description=$4,rank=$5 WHERE guild_id=$1 AND id=$2", guild_id, role_id, _clean_role_name(body.name), body.description, body.rank)
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(409, "A custom role with that name already exists in this server.") from exc
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.role.update", {"role_id": role_id})
     return {"ok": True}
 
@@ -428,7 +482,8 @@ async def create_rule(guild_id: int, body: RuleCreate, request: Request, slickey
     if not await permission_key_is_registered(request.app.state.pool, body.permission_key):
         raise HTTPException(422, "Choose a command or category from the command catalogue.")
     if body.effect == "allow" and not await actor_can_delegate_permission(
-        request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]), guild_owner_id=None,
+        request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
+        guild_owner_id=await _live_guild_owner_id(request, guild_id),
         permission_key=body.permission_key,
     ):
         raise HTTPException(403, "You can only grant permissions you currently hold yourself.")
@@ -456,7 +511,8 @@ async def presets():
 async def add_preset(guild_id: int, body: PresetCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
     session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
     await _require_below_rank(request, session, guild_id, ROLE_PRESETS[body.preset]["rank"])
-    if not await actor_can_delegate_preset(request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]), guild_owner_id=None, preset_key=body.preset):
+    if not await actor_can_delegate_preset(request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
+                                           guild_owner_id=await _live_guild_owner_id(request, guild_id), preset_key=body.preset):
         raise HTTPException(403, "You can only create a preset whose permissions you already hold.")
     try:
         role_id = await create_preset(request.app.state.pool, guild_id=guild_id, preset_key=body.preset, actor_id=int(session.user["id"]))
@@ -484,7 +540,8 @@ async def members(guild_id: int, request: Request, query: str = "", slickey_sess
 @app.post("/api/guilds/{guild_id}/explain")
 async def explain(guild_id: int, body: ExplainRequest, request: Request, slickey_session: str | None = Cookie(default=None)):
     session = await _session(request, slickey_session); await _can_open_guild(request, session, guild_id)
-    decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=body.user_id, guild_owner_id=None,
+    decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=body.user_id,
+                              guild_owner_id=await _live_guild_owner_id(request, guild_id),
                               command_name=body.command_name, channel_id=body.channel_id, category_id=body.category_id)
     return {"allowed": decision.allowed, "reason": decision.reason, "matched_rule_id": decision.matched_rule_id,
             "trace": list(decision.trace)}
@@ -512,7 +569,8 @@ async def update_rule(guild_id: int, rule_id: int, body: RuleCreate, request: Re
     if not await permission_key_is_registered(request.app.state.pool, body.permission_key):
         raise HTTPException(422, "Choose a command or category from the command catalogue.")
     if body.effect == "allow" and not await actor_can_delegate_permission(
-        request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]), guild_owner_id=None,
+        request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
+        guild_owner_id=await _live_guild_owner_id(request, guild_id),
         permission_key=body.permission_key,
     ):
         raise HTTPException(403, "You can only grant permissions you currently hold yourself.")

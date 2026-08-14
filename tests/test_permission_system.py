@@ -1,7 +1,11 @@
 import asyncio
+import ast
 import unittest
+from pathlib import Path
 
-from permission_system import BOT_CREATOR_ID, ROLE_PRESETS, command_keys, default_allowed, evaluate, is_broad_deny
+from permission_system import (BOT_CREATOR_ID, COMMAND_REGISTRY, PUBLIC_ACTION_COMMANDS, ROLE_PRESETS,
+                               canonical_command_name, command_keys, default_allowed,
+                               evaluate, is_broad_deny)
 
 
 class _Acquire:
@@ -27,6 +31,40 @@ class PermissionSystemTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(default_allowed("help"))
         self.assertTrue(is_broad_deny("command.*", "guild", "deny"))
         self.assertIn("administrator", ROLE_PRESETS)
+
+    def test_every_shipped_command_is_explicitly_classified(self):
+        self.assertEqual(len(COMMAND_REGISTRY), len(set(COMMAND_REGISTRY)))
+        self.assertTrue(all(access in {"public", "protected", "owner_only"}
+                            for _, access in COMMAND_REGISTRY.values()))
+        self.assertFalse(default_allowed("a-future-command"))
+        self.assertTrue(all(name in COMMAND_REGISTRY for name in PUBLIC_ACTION_COMMANDS))
+
+        # Static registrations must be added to COMMAND_REGISTRY deliberately.
+        # Dynamic social commands are covered by PUBLIC_ACTION_COMMANDS above.
+        root = Path(__file__).resolve().parents[1]
+        declared = set()
+        for filename in ("Slickey_Main_.py", "Slickey_Secondary_.py", "ai_cog.py"):
+            tree = ast.parse((root / filename).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for decorator in node.decorator_list:
+                    if not isinstance(decorator, ast.Call):
+                        continue
+                    target = ast.unparse(decorator.func)
+                    if not any(marker in target for marker in ("bot.command", "tree.command", "app_commands.command", "commands.command")):
+                        continue
+                    name = next((keyword.value.value for keyword in decorator.keywords
+                                 if keyword.arg == "name" and isinstance(keyword.value, ast.Constant)), None)
+                    if name:
+                        declared.add(name)
+        self.assertTrue(declared <= set(COMMAND_REGISTRY))
+        self.assertTrue({"massban", "massunban", "permissions"} <= set(COMMAND_REGISTRY))
+
+    def test_aliases_share_one_policy_key(self):
+        self.assertEqual(canonical_command_name("role_roulette"), "roleroulette")
+        self.assertEqual(command_keys("role_roulette")[0], "command.roleroulette")
+        self.assertEqual(canonical_command_name("/massban all"), "massban")
 
     async def test_creator_and_owner_bypass(self):
         creator = await evaluate(None, guild_id=1, user_id=BOT_CREATOR_ID, guild_owner_id=None, command_name="ban")

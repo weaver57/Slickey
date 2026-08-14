@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -27,33 +27,151 @@ async function api(path, options = {}) {
     );
   return r.status === 204 ? null : r.json();
 }
-const Select = ({
-  items = [],
+
+/* ---------- Icons ---------- */
+const Icon = {
+  overview: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M3 9.5 10 4l7 5.5M5 8.5V16a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  roles: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <circle cx="7" cy="7" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M2.5 16c.6-2.7 2.4-4.2 4.5-4.2s3.9 1.5 4.5 4.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="14.5" cy="6.5" r="2.1" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M12.7 11.6c1.8.2 3.2 1.6 3.8 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  ),
+  policies: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M10 2.5 16 5v4.4c0 4-2.6 6.7-6 8.1-3.4-1.4-6-4.1-6-8.1V5l6-2.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M7.4 10 9.2 11.8 12.7 8.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  catalog: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M4 5h12M4 10h12M4 15h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ),
+  audit: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 6v4.3l3 1.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  chevron: (p) => (
+    <svg viewBox="0 0 11 7" fill="none" {...p}>
+      <path d="M1 1l4.5 4.5L10 1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  panel: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <rect x="3" y="4" width="14" height="12" rx="2.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M8.3 4v12" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  ),
+  menu: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ),
+  close: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M5 5l10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  ),
+  theme: (p) => (
+    <svg viewBox="0 0 20 20" fill="none" {...p}>
+      <path d="M10 3a7 7 0 1 0 7 7c0-.3 0-.6-.05-.9A5.2 5.2 0 0 1 10 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
+};
+
+/* ---------- Dropdown (replaces every native <select>) ---------- */
+function Dropdown({
+  name,
   value,
   onChange,
-  placeholder = "Choose one",
-}) => (
-  <select value={value} onChange={(e) => onChange(e.target.value)}>
-    <option value="">{placeholder}</option>
-    {items.map((x) => (
-      <option key={x.id} value={x.id}>
-        {x.name}
-      </option>
-    ))}
-  </select>
-);
+  options = [],
+  placeholder = "Select",
+  required = false,
+  disabled = false,
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const selected = options.find((o) => String(o.value) === String(value));
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  const pick = (v) => {
+    onChange?.(v);
+    setOpen(false);
+  };
+
+  return (
+    <div className={`dd${disabled ? " dd-disabled" : ""}`} ref={ref}>
+      {name && <input type="hidden" name={name} value={value ?? ""} />}
+      <button
+        type="button"
+        className={`dd-trigger${open ? " open" : ""}${!selected ? " placeholder" : ""}`}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled}
+      >
+        <span>{selected ? selected.label : placeholder}</span>
+        <Icon.chevron className="dd-chevron" />
+      </button>
+      {open && (
+        <div className="dd-menu">
+          {!required && (
+            <div
+              className={`dd-option${!selected ? " active" : ""}`}
+              onClick={() => pick("")}
+            >
+              {placeholder}
+            </div>
+          )}
+          {options.map((o) => (
+            <div
+              key={o.value}
+              className={`dd-option${String(o.value) === String(value) ? " active" : ""}`}
+              onClick={() => pick(o.value)}
+            >
+              {o.label}
+            </div>
+          ))}
+          {!options.length && <div className="dd-option dd-empty">Nothing here yet</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const Notice = ({ error, notice, clear }) => (
   <>
     {error && (
       <div className="alert error">
-        {error}
-        <button onClick={clear}>x</button>
+        <span>{error}</span>
+        <button onClick={clear}><Icon.close width="14" height="14" /></button>
       </div>
     )}
     {notice && (
       <div className="alert notice">
-        {notice}
-        <button onClick={clear}>x</button>
+        <span>{notice}</span>
+        <button onClick={clear}><Icon.close width="14" height="14" /></button>
       </div>
     )}
   </>
@@ -72,14 +190,24 @@ function Login() {
   };
   return (
     <main className="login">
+      <div className="login-glow" />
       <div className="mark">S</div>
       <h1>Slickey</h1>
       <p>Clear, powerful permissions for your Discord community.</p>
-      {error && <div className="alert error">{error}</div>}
+      {error && <div className="alert error"><span>{error}</span></div>}
       <button onClick={login}>Continue with Discord</button>
     </main>
   );
 }
+
+const NAV = [
+  ["overview", "Overview", Icon.overview],
+  ["roles", "Roles & members", Icon.roles],
+  ["policies", "Policies", Icon.policies],
+  ["catalog", "Command catalogue", Icon.catalog],
+  ["audit", "Activity", Icon.audit],
+];
+
 function App() {
   const [me, setMe] = useState(null),
     [guilds, setGuilds] = useState([]),
@@ -95,7 +223,20 @@ function App() {
       presets: [],
     }),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [collapsed, setCollapsed] = useState(
+      () => localStorage.getItem("slickey_sidebar") === "collapsed",
+    ),
+    [mobileOpen, setMobileOpen] = useState(false),
+    [dark, setDark] = useState(
+  () => localStorage.getItem("slickey_theme") === "dark",);
+
+  useEffect(() => {
+    localStorage.setItem("slickey_sidebar", collapsed ? "collapsed" : "open");
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  localStorage.setItem("slickey_theme", dark ? "dark" : "light");
+  }, [collapsed, dark]);
+
   const fail = (e) => setError(e.message || "Something went wrong.");
   const clear = () => {
     setError("");
@@ -138,9 +279,17 @@ function App() {
   useEffect(() => {
     refresh().catch(fail);
   }, [guild]);
+
   if (me === null)
-    return <main className="login">Loading your workspace...</main>;
+    return (
+      <main className="login">
+        <div className="login-glow" />
+        <div className="mark pulse">S</div>
+        <p className="muted">Loading your workspace…</p>
+      </main>
+    );
   if (me === false) return <Login />;
+
   const mutate = async (fn, message) => {
     try {
       await fn();
@@ -154,46 +303,80 @@ function App() {
     (a, x) => ((a[x.category] ??= []).push(x), a),
     {},
   );
+  const goTo = (id) => {
+    setPage(id);
+    setMobileOpen(false);
+  };
+
   return (
-    <div className="app">
-      <aside>
-        <div className="brand">
-          <span className="mark small">S</span>
-          <b>Slickey</b>
+    <div className={`app${collapsed ? " collapsed" : ""}`}>
+      {mobileOpen && <div className="backdrop" onClick={() => setMobileOpen(false)} />}
+      <aside className={mobileOpen ? "mobile-open" : ""}>
+        <div className="aside-top">
+          <div className="brand">
+            <span className="mark small">S</span>
+            {!collapsed && <b>Slickey</b>}
+          </div>
+          <button
+            className="rail-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <Icon.panel width="16" height="16" />
+          </button>
+          <button className="mobile-close" onClick={() => setMobileOpen(false)}>
+            <Icon.close width="18" height="18" />
+          </button>
+          <button className="theme-toggle" onClick={() => setDark((d) => !d)} title={dark ? "Switch to light mode" : "Switch to dark mode"}>
+            <Icon.theme width="15" height="15" />
+          </button>
         </div>
-        <div className="identity">
-          Signed in as <b>{me.username}</b>
-        </div>
-        <Select
-          items={guilds}
-          value={guild?.id || ""}
-          onChange={(id) => setGuild(guilds.find((x) => x.id === id))}
-          placeholder="Select a server"
-        />
+
+        {!collapsed && (
+          <div className="identity">
+            Signed in as <b>{me.username}</b>
+          </div>
+        )}
+
+        {!collapsed && (
+          <Dropdown
+            value={guild?.id || ""}
+            onChange={(id) => setGuild(guilds.find((x) => x.id === id))}
+            options={guilds.map((g) => ({ value: g.id, label: g.name }))}
+            placeholder="Select a server"
+            required
+          />
+        )}
+
         <nav>
-          {[
-            ["overview", "Overview"],
-            ["roles", "Roles & members"],
-            ["policies", "Policies"],
-            ["catalog", "Command catalogue"],
-            ["audit", "Activity"],
-          ].map(([id, label]) => (
+          {NAV.map(([id, label, IconCmp]) => (
             <button
               className={page === id ? "nav active" : "nav"}
-              onClick={() => setPage(id)}
+              onClick={() => goTo(id)}
               key={id}
+              title={collapsed ? label : undefined}
             >
-              {label}
+              <IconCmp className="nav-icon" width="17" height="17" />
+              {!collapsed && <span>{label}</span>}
             </button>
           ))}
         </nav>
-        <p className="aside-note">
-          Only the owner, Bot Creator, and people granted dashboard access can
-          enter.
-        </p>
+
+        {!collapsed && (
+          <p className="aside-note">
+            Only the owner, Bot Creator, and people granted dashboard access
+            can enter.
+          </p>
+        )}
       </aside>
+
       <main>
+        <button className="mobile-hamburger" onClick={() => setMobileOpen(true)}>
+          <Icon.menu width="19" height="19" />
+        </button>
+
         <Notice error={error} notice={notice} clear={clear} />
+
         {!guild ? (
           <section className="empty">
             <h1>No accessible servers</h1>
@@ -206,43 +389,47 @@ function App() {
           <>
             <header>
               <div>
-                <span className="eyebrow">SERVER WORKSPACE</span>
+                <span className="eyebrow">Server workspace</span>
                 <h1>{guild.name}</h1>
               </div>
               <span className="pill">
                 {guild.owner ? "Owner access" : "Delegated access"}
               </span>
             </header>
-            {page === "overview" && (
-              <Overview
-                data={data}
-                createPreset={(key) =>
-                  mutate(
-                    () =>
-                      api(`/api/guilds/${guild.id}/roles/preset`, {
-                        method: "POST",
-                        body: JSON.stringify({ preset: key }),
-                      }),
-                    "Role created. Continue to members to assign it.",
-                  )
-                }
-                go={setPage}
-              />
-            )}{" "}
-            {page === "roles" && (
-              <Roles data={data} guild={guild} mutate={mutate} />
-            )}{" "}
-            {page === "policies" && (
-              <Policies data={data} guild={guild} mutate={mutate} />
-            )}{" "}
-            {page === "catalog" && <Catalogue groups={groups} />}{" "}
-            {page === "audit" && <Audit audit={data.audit} />}
+
+            <div className="page-enter" key={page}>
+              {page === "overview" && (
+                <Overview
+                  data={data}
+                  createPreset={(key) =>
+                    mutate(
+                      () =>
+                        api(`/api/guilds/${guild.id}/roles/preset`, {
+                          method: "POST",
+                          body: JSON.stringify({ preset: key }),
+                        }),
+                      "Role created. Continue to members to assign it.",
+                    )
+                  }
+                  go={goTo}
+                />
+              )}
+              {page === "roles" && (
+                <Roles data={data} guild={guild} mutate={mutate} />
+              )}
+              {page === "policies" && (
+                <Policies data={data} guild={guild} mutate={mutate} />
+              )}
+              {page === "catalog" && <Catalogue groups={groups} />}
+              {page === "audit" && <Audit audit={data.audit} />}
+            </div>
           </>
         )}
       </main>
     </div>
   );
 }
+
 function Overview({ data, createPreset, go }) {
   const [step, setStep] = useState(0),
     [chosen, setChosen] = useState("");
@@ -262,19 +449,19 @@ function Overview({ data, createPreset, go }) {
       <div className="stats">
         <div>
           <b>{data.roles.length}</b>
-          <span>custom roles</span>
+          <span>Custom roles</span>
         </div>
         <div>
           <b>{data.rules.length}</b>
-          <span>active policies</span>
+          <span>Active policies</span>
         </div>
         <div>
           <b>Live</b>
-          <span>owner access</span>
+          <span>Owner access</span>
         </div>
       </div>
       <section className="glass wizard">
-        <span className="eyebrow">GUIDED SETUP</span>
+        <span className="eyebrow">Guided setup</span>
         <h2>
           {
             [
@@ -298,7 +485,7 @@ function Overview({ data, createPreset, go }) {
                 >
                   <b>{p.name}</b>
                   <small>
-                    {p.description} - rank {p.rank}
+                    {p.description} · rank {p.rank}
                   </small>
                 </button>
               ))}
@@ -311,9 +498,9 @@ function Overview({ data, createPreset, go }) {
         {step === 1 && (
           <>
             <p>
-              {preset?.name} can be changed after creation. Delegated managers
-              can only create a preset when they already hold each included
-              permission.
+              {preset?.name} can be changed after creation. Delegated
+              managers can only create a preset when they already hold each
+              included permission.
             </p>
             <div className="wizard-actions">
               <button className="ghost" onClick={() => setStep(0)}>
@@ -333,9 +520,9 @@ function Overview({ data, createPreset, go }) {
         {step === 2 && (
           <>
             <p>
-              Your role is ready. Assign people from the Roles & members page,
-              then use Policies to limit commands to specific channels if
-              needed.
+              Your role is ready. Assign people from the Roles & members
+              page, then use Policies to limit commands to specific channels
+              if needed.
             </p>
             <div className="wizard-actions">
               <button onClick={() => go("roles")}>Assign members</button>
@@ -349,6 +536,7 @@ function Overview({ data, createPreset, go }) {
     </>
   );
 }
+
 function Roles({ data, guild, mutate }) {
   const [detail, setDetail] = useState(null),
     [member, setMember] = useState("");
@@ -369,8 +557,8 @@ function Roles({ data, guild, mutate }) {
                 <b>{r.name}</b>
                 <small>{r.description || "No description"}</small>
               </span>
-              <span>
-                {r.member_count} members - rank {r.rank}
+              <span className="row-meta">
+                {r.member_count} members · rank {r.rank}
               </span>
             </button>
           ))}
@@ -385,7 +573,7 @@ function Roles({ data, guild, mutate }) {
       {role && (
         <section className="drawer glass">
           <button className="close" onClick={() => setDetail(null)}>
-            x
+            <Icon.close width="18" height="18" />
           </button>
           <h2>{role.name}</h2>
           <form
@@ -414,10 +602,10 @@ function Roles({ data, guild, mutate }) {
           </form>
           <h3>Members</h3>
           <div className="assign">
-            <Select
-              items={data.members}
+            <Dropdown
               value={member}
               onChange={setMember}
+              options={data.members.map((m) => ({ value: m.id, label: m.name }))}
               placeholder="Choose a member"
             />
             <button
@@ -454,7 +642,7 @@ function Roles({ data, guild, mutate }) {
                       ).then(() => open(role.id))
                     }
                   >
-                    x
+                    <Icon.close width="10" height="10" />
                   </button>
                 </span>
               );
@@ -463,7 +651,7 @@ function Roles({ data, guild, mutate }) {
           </div>
           <h3>Role policies</h3>
           {detail.rules.map((r) => (
-            <p key={r.id}>
+            <p key={r.id} className="rule-line">
               <b className={r.effect}>{r.effect}</b>{" "}
               <code>{r.permission_key}</code> in {r.scope_type}
             </p>
@@ -487,6 +675,7 @@ function Roles({ data, guild, mutate }) {
     </section>
   );
 }
+
 function RoleCreate({ guild, mutate }) {
   return (
     <form
@@ -517,89 +706,143 @@ function RoleCreate({ guild, mutate }) {
     </form>
   );
 }
+
 function Policies({ data, guild, mutate }) {
-  const [subject, setSubject] = useState("role"),
-    [scope, setScope] = useState("guild"),
+  const [subjectType, setSubjectType] = useState("role"),
+    [subjectTarget, setSubjectTarget] = useState(""),
+    [key, setKey] = useState(""),
+    [effect, setEffect] = useState("allow"),
+    [scopeType, setScopeType] = useState("guild"),
+    [scopeTarget, setScopeTarget] = useState(""),
+    [confirmBroad, setConfirmBroad] = useState(false),
     [why, setWhy] = useState({ user: "", command: "", channel: "" }),
     [result, setResult] = useState(null);
-  const submit = async (e) => {
+
+  const canSubmit =
+    key &&
+    (subjectType === "member" || subjectTarget) &&
+    (scopeType === "guild" || scopeTarget);
+
+  const submit = (e) => {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    await mutate(
+    if (!canSubmit) return;
+    mutate(
       () =>
         api(`/api/guilds/${guild.id}/rules`, {
           method: "POST",
           body: JSON.stringify({
-            subject_type: subject,
-            subject_id: subject === "member" ? null : Number(f.get("subject")),
-            permission_key: f.get("key"),
-            effect: f.get("effect"),
-            scope_type: scope,
-            scope_id: scope === "guild" ? null : Number(f.get("scope")),
-            confirm_broad_deny: f.get("confirm") === "on",
+            subject_type: subjectType,
+            subject_id: subjectType === "member" ? null : Number(subjectTarget),
+            permission_key: key,
+            effect,
+            scope_type: scopeType,
+            scope_id: scopeType === "guild" ? null : Number(scopeTarget),
+            confirm_broad_deny: confirmBroad,
           }),
         }),
       "Policy saved.",
     );
   };
+
   return (
     <>
       <section className="split">
         <form className="glass form" onSubmit={submit}>
           <h2>Create policy</h2>
-          <select value={subject} onChange={(e) => setSubject(e.target.value)}>
-            <option value="role">A custom role</option>
-            <option value="user">A specific member</option>
-            <option value="member">Everyone</option>
-          </select>
-          {subject !== "member" && (
-            <select name="subject" required>
-              <option value="">Choose target</option>
-              {(subject === "role" ? data.roles : data.members).map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
+
+          <Dropdown
+            required
+            value={subjectType}
+            onChange={(v) => {
+              setSubjectType(v);
+              setSubjectTarget("");
+            }}
+            options={[
+              { value: "role", label: "A custom role" },
+              { value: "user", label: "A specific member" },
+              { value: "member", label: "Everyone" },
+            ]}
+          />
+
+          {subjectType !== "member" && (
+            <Dropdown
+              required
+              value={subjectTarget}
+              onChange={setSubjectTarget}
+              placeholder="Choose target"
+              options={(subjectType === "role" ? data.roles : data.members).map(
+                (x) => ({ value: x.id, label: x.name }),
+              )}
+            />
           )}
-          <select name="key" required>
-            <option value="">Choose command or category</option>
-            {data.catalog.map((x) => (
-              <option key={x.command_path} value={x.permission_key}>
-                {x.display_name} - {x.category}
-              </option>
-            ))}
-            <option value="command.*">All commands</option>
-          </select>
-          <select name="effect">
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
-          </select>
-          <select value={scope} onChange={(e) => setScope(e.target.value)}>
-            <option value="guild">Entire server</option>
-            <option value="category">One category</option>
-            <option value="channel">One channel</option>
-          </select>
-          {scope !== "guild" && (
-            <select name="scope" required>
-              <option value="">Choose scope</option>
-              {data.channels
+
+          <Dropdown
+            required
+            value={key}
+            onChange={setKey}
+            placeholder="Choose command or category"
+            options={[
+              ...data.catalog.map((x) => ({
+                value: x.permission_key,
+                label: `${x.display_name} · ${x.category}`,
+              })),
+              { value: "command.*", label: "All commands" },
+            ]}
+          />
+
+          <Dropdown
+            required
+            value={effect}
+            onChange={setEffect}
+            options={[
+              { value: "allow", label: "Allow" },
+              { value: "deny", label: "Deny" },
+            ]}
+          />
+
+          <Dropdown
+            required
+            value={scopeType}
+            onChange={(v) => {
+              setScopeType(v);
+              setScopeTarget("");
+            }}
+            options={[
+              { value: "guild", label: "Entire server" },
+              { value: "category", label: "One category" },
+              { value: "channel", label: "One channel" },
+            ]}
+          />
+
+          {scopeType !== "guild" && (
+            <Dropdown
+              required
+              value={scopeTarget}
+              onChange={setScopeTarget}
+              placeholder="Choose scope"
+              options={data.channels
                 .filter((x) =>
-                  scope === "category" ? x.type === 4 : x.type === 0,
+                  scopeType === "category" ? x.type === 4 : x.type === 0,
                 )
-                .map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {scope === "category" ? "Category: " : "#"}
-                    {x.name}
-                  </option>
-                ))}
-            </select>
+                .map((x) => ({
+                  value: x.id,
+                  label: (scopeType === "category" ? "Category: " : "#") + x.name,
+                }))}
+            />
           )}
+
           <label className="check">
-            <input name="confirm" type="checkbox" /> Confirm broad deny
+            <input
+              type="checkbox"
+              checked={confirmBroad}
+              onChange={(e) => setConfirmBroad(e.target.checked)}
+            />
+            Confirm broad deny
           </label>
-          <button>Save policy</button>
+
+          <button disabled={!canSubmit}>Save policy</button>
         </form>
+
         <WhyPanel
           data={data}
           why={why}
@@ -609,6 +852,7 @@ function Policies({ data, guild, mutate }) {
           guild={guild}
         />
       </section>
+
       <section>
         <h2>Active policies</h2>
         <div className="list">
@@ -618,7 +862,7 @@ function Policies({ data, guild, mutate }) {
                 <b className={r.effect}>{r.effect}</b>{" "}
                 <code>{r.permission_key}</code>
                 <small>
-                  {r.subject_type} - {r.scope_type}
+                  {r.subject_type} · {r.scope_type}
                 </small>
               </span>
               <button
@@ -637,11 +881,15 @@ function Policies({ data, guild, mutate }) {
               </button>
             </div>
           ))}
+          {!data.rules.length && (
+            <p className="empty-inline">No policies yet.</p>
+          )}
         </div>
       </section>
     </>
   );
 }
+
 function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
   const explain = async () =>
     setResult(
@@ -660,33 +908,28 @@ function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
       <p className="muted">
         Preview the exact decision and the rules that were considered.
       </p>
-      <Select
-        items={data.members}
+      <Dropdown
         value={why.user}
         onChange={(user) => setWhy({ ...why, user })}
+        options={data.members.map((m) => ({ value: m.id, label: m.name }))}
         placeholder="Select member"
       />
-      <select
+      <Dropdown
         value={why.command}
-        onChange={(e) => setWhy({ ...why, command: e.target.value })}
-      >
-        <option value="">Select command</option>
-        {data.catalog.map((x) => (
-          <option
-            key={x.command_path}
-            value={x.permission_key.replace("command.", "")}
-          >
-            {x.display_name}
-          </option>
-        ))}
-      </select>
-      <Select
-        items={data.channels
-          .filter((x) => x.type === 0)
-          .map((x) => ({ ...x, name: `#${x.name}` }))}
+        onChange={(command) => setWhy({ ...why, command })}
+        placeholder="Select command"
+        options={data.catalog.map((x) => ({
+          value: x.permission_key.replace("command.", ""),
+          label: x.display_name,
+        }))}
+      />
+      <Dropdown
         value={why.channel}
         onChange={(channel) => setWhy({ ...why, channel })}
         placeholder="Any channel"
+        options={data.channels
+          .filter((x) => x.type === 0)
+          .map((x) => ({ value: x.id, label: `#${x.name}` }))}
       />
       <button disabled={!why.user || !why.command} onClick={explain}>
         Explain access
@@ -718,13 +961,14 @@ function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
     </section>
   );
 }
+
 function Catalogue({ groups }) {
   return (
     <>
       <h2>Command catalogue</h2>
       <p className="muted">
-        Protected commands need an allow policy. Public commands are available
-        until restricted.
+        Protected commands need an allow policy. Public commands are
+        available until restricted.
       </p>
       {Object.entries(groups).map(([category, items]) => (
         <section className="catalogue" key={category}>
@@ -734,7 +978,7 @@ function Catalogue({ groups }) {
               <span>
                 <b>{x.display_name}</b>
                 <small>
-                  {x.command_path} -{" "}
+                  {x.command_path} ·{" "}
                   {x.description || "No description supplied"}
                 </small>
               </span>
@@ -754,6 +998,7 @@ function Catalogue({ groups }) {
     </>
   );
 }
+
 function Audit({ audit }) {
   return (
     <>
@@ -765,7 +1010,7 @@ function Audit({ audit }) {
             <span>
               <b>{x.action}</b>
               <small>
-                by {x.actor_id} - {new Date(x.created_at).toLocaleString()}
+                by {x.actor_id} · {new Date(x.created_at).toLocaleString()}
               </small>
             </span>
           </div>
@@ -779,4 +1024,5 @@ function Audit({ audit }) {
     </>
   );
 }
+
 createRoot(document.getElementById("root")).render(<App />);
