@@ -614,6 +614,12 @@ button.ghost {
   padding: 6px;
   animation: ddIn 0.12s ease;
 }
+
+.dd-search {
+  width: calc(100% - 16px);
+  margin: 8px;
+  box-sizing: border-box;
+}
 @keyframes ddIn {
   from {
     opacity: 0;
@@ -1035,3 +1041,4 @@ button.ghost {
     flex-wrap: wrap;
   }
 }
+

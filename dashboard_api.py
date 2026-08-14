@@ -160,13 +160,17 @@ async def _can_open_guild(request: Request, session: DashboardSession, guild_id:
     if not guild:
         raise HTTPException(403, "You are not a member of this Discord server.")
     user_id = int(session.user["id"])
+    # This call is also the authoritative check that the configured dashboard
+    # bot is currently in the server.  Even the Bot Creator only sees active
+    # bot guilds in the dashboard.
+    owner_id = await _live_guild_owner_id(request, guild_id)
     if user_id == BOT_CREATOR_ID:
         return guild
-    await _require_live_membership(guild_id, user_id)
     # OAuth's guild-owner bit is a login-time snapshot.  Ownership can change,
     # so it must never grant dashboard access by itself.
-    if await _live_guild_owner_id(request, guild_id) == user_id:
+    if owner_id == user_id:
         return guild
+    await _require_live_membership(guild_id, user_id)
     decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=user_id, guild_owner_id=None,
                               command_name="dashboard")
     if not (decision.allowed and decision.matched_rule_id is not None):
@@ -530,11 +534,22 @@ async def channels(guild_id: int, request: Request, slickey_session: str | None 
 
 
 @app.get("/api/guilds/{guild_id}/members")
-async def members(guild_id: int, request: Request, query: str = "", slickey_session: str | None = Cookie(default=None)):
+async def members(guild_id: int, request: Request, query: str = "", limit: int = 100,
+                  slickey_session: str | None = Cookie(default=None)):
     session = await _session(request, slickey_session); await _can_open_guild(request, session, guild_id)
-    data = await _discord_bot_get(f"/guilds/{guild_id}/members?limit=1000")
     query = query.lower().strip()
-    return [{"id": item["user"]["id"], "name": item.get("nick") or item["user"]["username"]} for item in data if not query or query in (item.get("nick") or item["user"]["username"]).lower()]
+    limit = min(max(limit, 1), 100)
+    # Discord's list endpoint is capped and ordered by ID.  Use its dedicated
+    # search endpoint once the dashboard user types, so members beyond the
+    # first page remain selectable in large servers.  Numeric IDs are resolved
+    # directly, which is useful for an exact known member.
+    if query.isdigit():
+        data = [await _discord_bot_get(f"/guilds/{guild_id}/members/{query}")]
+    elif query:
+        data = await _discord_bot_get(f"/guilds/{guild_id}/members/search?{urlencode({'query': query, 'limit': limit})}")
+    else:
+        data = await _discord_bot_get(f"/guilds/{guild_id}/members?limit={limit}")
+    return [{"id": item["user"]["id"], "name": item.get("nick") or item["user"]["username"]} for item in data]
 
 
 @app.post("/api/guilds/{guild_id}/explain")

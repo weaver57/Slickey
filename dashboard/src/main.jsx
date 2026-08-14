@@ -97,10 +97,19 @@ function Dropdown({
   placeholder = "Select",
   required = false,
   disabled = false,
+  onSearch,
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false),
+    [query, setQuery] = useState(""),
+    [remote, setRemote] = useState([]),
+    [searching, setSearching] = useState(false);
   const ref = useRef(null);
-  const selected = options.find((o) => String(o.value) === String(value));
+  const selected = [...remote, ...options].find(
+    (o) => String(o.value) === String(value),
+  );
+  const filtered = (onSearch && query.trim() ? remote : options).filter((o) =>
+    String(o.label).toLowerCase().includes(query.toLowerCase()),
+  );
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -119,8 +128,22 @@ function Dropdown({
 
   const pick = (v) => {
     onChange?.(v);
+    setQuery("");
     setOpen(false);
   };
+
+  useEffect(() => {
+    if (!open || !onSearch || !query.trim()) return;
+    const timer = setTimeout(async () => {
+      try {
+        setSearching(true);
+        setRemote(await onSearch(query.trim()));
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [open, query]);
 
   return (
     <div className={`dd${disabled ? " dd-disabled" : ""}`} ref={ref}>
@@ -136,6 +159,13 @@ function Dropdown({
       </button>
       {open && (
         <div className="dd-menu">
+          <input
+            className="dd-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Type to search…"
+            autoFocus
+          />
           {!required && (
             <div
               className={`dd-option${!selected ? " active" : ""}`}
@@ -144,7 +174,7 @@ function Dropdown({
               {placeholder}
             </div>
           )}
-          {options.map((o) => (
+          {filtered.map((o) => (
             <div
               key={o.value}
               className={`dd-option${String(o.value) === String(value) ? " active" : ""}`}
@@ -153,7 +183,8 @@ function Dropdown({
               {o.label}
             </div>
           ))}
-          {!options.length && <div className="dd-option dd-empty">Nothing here yet</div>}
+          {searching && <div className="dd-option dd-empty">Searching…</div>}
+          {!searching && !filtered.length && <div className="dd-option dd-empty">Nothing found</div>}
         </div>
       )}
     </div>
@@ -244,15 +275,20 @@ function App() {
   };
   const refresh = async (g = guild) => {
     if (!g) return;
-    const [roles, rules, members, channels, audit] = await Promise.all([
+    const [roles, rules, channels, audit] = await Promise.all([
       api(`/api/guilds/${g.id}/roles`),
       api(`/api/guilds/${g.id}/rules`),
-      api(`/api/guilds/${g.id}/members`),
       api(`/api/guilds/${g.id}/channels`),
       api(`/api/guilds/${g.id}/audit`),
     ]);
+    const members = await api(`/api/guilds/${g.id}/members`).catch((e) => {
+      setError(`Member picker unavailable: ${e.message}`);
+      return [];
+    });
     setData((d) => ({ ...d, roles, rules, members, channels, audit }));
   };
+  const searchMembers = async (guildId, query) =>
+    api(`/api/guilds/${guildId}/members?query=${encodeURIComponent(query)}&limit=50`);
   useEffect(() => {
     (async () => {
       try {
@@ -415,10 +451,10 @@ function App() {
                 />
               )}
               {page === "roles" && (
-                <Roles data={data} guild={guild} mutate={mutate} />
+                <Roles data={data} guild={guild} mutate={mutate} searchMembers={searchMembers} />
               )}
               {page === "policies" && (
-                <Policies data={data} guild={guild} mutate={mutate} />
+                <Policies data={data} guild={guild} mutate={mutate} searchMembers={searchMembers} />
               )}
               {page === "catalog" && <Catalogue groups={groups} />}
               {page === "audit" && <Audit audit={data.audit} />}
@@ -537,7 +573,7 @@ function Overview({ data, createPreset, go }) {
   );
 }
 
-function Roles({ data, guild, mutate }) {
+function Roles({ data, guild, mutate, searchMembers }) {
   const [detail, setDetail] = useState(null),
     [member, setMember] = useState("");
   const open = async (id) =>
@@ -607,6 +643,7 @@ function Roles({ data, guild, mutate }) {
               onChange={setMember}
               options={data.members.map((m) => ({ value: m.id, label: m.name }))}
               placeholder="Choose a member"
+              onSearch={(query) => searchMembers(guild.id, query).then((members) => members.map((m) => ({ value: m.id, label: m.name })))}
             />
             <button
               disabled={!member}
@@ -707,7 +744,7 @@ function RoleCreate({ guild, mutate }) {
   );
 }
 
-function Policies({ data, guild, mutate }) {
+function Policies({ data, guild, mutate, searchMembers }) {
   const [subjectType, setSubjectType] = useState("role"),
     [subjectTarget, setSubjectTarget] = useState(""),
     [key, setKey] = useState(""),
@@ -773,6 +810,7 @@ function Policies({ data, guild, mutate }) {
               options={(subjectType === "role" ? data.roles : data.members).map(
                 (x) => ({ value: x.id, label: x.name }),
               )}
+              onSearch={subjectType === "user" ? (query) => searchMembers(guild.id, query).then((members) => members.map((m) => ({ value: m.id, label: m.name }))) : undefined}
             />
           )}
 
@@ -850,6 +888,7 @@ function Policies({ data, guild, mutate }) {
           result={result}
           setResult={setResult}
           guild={guild}
+          searchMembers={searchMembers}
         />
       </section>
 
@@ -890,7 +929,7 @@ function Policies({ data, guild, mutate }) {
   );
 }
 
-function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
+function WhyPanel({ data, why, setWhy, result, setResult, guild, searchMembers }) {
   const explain = async () =>
     setResult(
       await api(`/api/guilds/${guild.id}/explain`, {
@@ -913,6 +952,7 @@ function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
         onChange={(user) => setWhy({ ...why, user })}
         options={data.members.map((m) => ({ value: m.id, label: m.name }))}
         placeholder="Select member"
+        onSearch={(query) => searchMembers(guild.id, query).then((members) => members.map((m) => ({ value: m.id, label: m.name })))}
       />
       <Dropdown
         value={why.command}
