@@ -12,6 +12,7 @@ from datetime import datetime
 
 # from anime_api.apis import NekosAPI
 import utils
+import permission_system
 from utils import get_user_level, is_authorized_or_not, is_command_blocked, has_command_permission, operation_active, active_role_timers, get_top_slaves, ShopPaginationView, is_valid_url, WAIFU_IM_API, ALL_TAGS, ACTIONS, SFW_TAGS, NSFW_TAGS, GIFUKAI_API, GIFUKAI_ALIASES
 
 BOT_START_TIME = datetime.utcnow()
@@ -292,8 +293,7 @@ async def run_query(ctx):
 @app_commands.command(name="spawn", description="Turn spawn ON/OFF for this server")
 @app_commands.choices(action=[app_commands.Choice(name="Enable", value="enable"), app_commands.Choice(name="Disable", value="disable")])
 async def toggle_spawn(interaction: discord.Interaction, action: app_commands.Choice[str]):
-    if interaction.user.id not in [1068465457910267975] and not await get_user_level(interaction.guild.id, interaction.user.id) > 2:
-        await interaction.response.send_message("Only Admin and above ranks can use this command.", ephemeral=True)
+    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "toggle_spawn"):
         return
     
     guild_id = str(interaction.guild.id)
@@ -507,10 +507,7 @@ async def hello_text(ctx: commands.Context):
     channel="The channel where the spam should be sent. Defaults to the current channel."
 )
 async def spam(interaction: discord.Interaction, message: str, count: int, channel: discord.TextChannel = None):
-    if not (await get_user_level(interaction.guild.id, interaction.user.id) in [1, 3, 4, 5]):
-        await interaction.response.send_message(
-            "You are not allowed to use the spam command. Only 'owner', 'authorized', and 'admin' roles and special command permissions can use this command.",
-            ephemeral=True)
+    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "spam"):
         return
     if await is_command_blocked(interaction.guild.id, interaction.user.id, "spam"):
         await interaction.response.send_message("You're blocked from using spam command.")
@@ -548,11 +545,7 @@ async def spam(interaction: discord.Interaction, message: str, count: int, chann
 
 @app_commands.command(name="stop", description="Stop all ongoing bot operations.")
 async def stop(interaction: discord.Interaction):
-    if not (interaction.user.id in [1068465457910267975, 1112026631310159892] or (
-            await get_user_level(interaction.guild.id, interaction.user.id)) in [3, 4, 5]):
-        await interaction.response.send_message(
-            "You are not allowed to use the stop command. Only 'owner', 'authorized', and 'admin' roles can use this command for security reasons.",
-            ephemeral=True)
+    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "stop"):
         return
     global operation_active, active_role_timers
     operation_active = False

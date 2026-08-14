@@ -1,0 +1,714 @@
+"""Server-scoped, policy-based permissions for Slickey.
+
+This module deliberately does not use Discord's permission model.  Discord is
+used only to identify the current guild owner; Slickey permissions remain a
+separate, fully configurable system.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+
+# This account is the bot creator, not a guild role.  It is intentionally a
+# permanent bypass and must be shown as "Bot Creator" in future dashboard UI.
+BOT_CREATOR_ID = 1068465457910267975
+
+
+def is_superuser(user_id: int, guild_owner_id: Optional[int] = None) -> bool:
+    """The only two unconditional identities: Bot Creator and current owner."""
+    return user_id == BOT_CREATOR_ID or (guild_owner_id is not None and user_id == guild_owner_id)
+
+
+@dataclass(frozen=True)
+class PermissionDecision:
+    allowed: bool
+    reason: str
+    matched_rule_id: Optional[int] = None
+    trace: tuple[dict[str, Any], ...] = ()
+
+
+# Commands can be placed in a category without changing saved policies.  Any
+# unlisted command is still addressable as command.<its-name>.
+COMMAND_CATEGORIES = {
+    "ban": "moderation", "unban": "moderation", "mute": "moderation",
+    "unmute": "moderation", "purge": "moderation", "setnick": "moderation",
+    "role": "moderation", "modlogs": "moderation", "purgereaction": "moderation",
+    "setprefix": "configuration", "selfprefix": "configuration",
+    "giveperm": "configuration", "takeperm": "configuration", "botperm": "configuration",
+    "wallet": "economy", "balance": "economy", "give": "economy", "tip": "economy",
+    "tribute": "economy", "daily": "economy", "beg": "economy", "shop": "economy",
+    "slbuy": "economy", "auction": "economy", "cf": "economy", "diceroll": "economy",
+    "jackpot": "economy", "permissions": "configuration",
+}
+
+# Friendly names used by the dashboard.  Keys not listed here remain fully
+# supported as ``command.<name>`` policies; every prefix and slash command is
+# still passed through ``install`` below.
+COMMAND_CATALOG = {
+    "permissions": ("Permissions", "configuration"),
+    "dashboard": ("Dashboard access", "configuration"),
+    "setprefix": ("Set server prefix", "configuration"),
+    "ban": ("Ban member", "moderation"), "unban": ("Unban member", "moderation"),
+    "mute": ("Mute member", "moderation"), "unmute": ("Unmute member", "moderation"),
+    "purge": ("Purge messages", "moderation"), "setnick": ("Set nickname", "moderation"),
+    "role": ("Manage Discord role", "moderation"), "modlogs": ("View moderation logs", "moderation"),
+    "wallet": ("Wallet", "economy"), "balance": ("Balance", "economy"),
+    "give": ("Give currency", "economy"), "tip": ("Tip", "economy"),
+    "daily": ("Daily reward", "economy"), "beg": ("Beg", "economy"),
+}
+
+# Presets are deliberately small and editable after creation.  Administrator
+# means administrator of Slickey, not Discord's native Administrator bit.
+ROLE_PRESETS: dict[str, dict[str, Any]] = {
+    "administrator": {"name": "Administrator", "description": "Full Slickey administration", "rank": 100,
+                      "permissions": ("command.*",)},
+    "moderator": {"name": "Moderator", "description": "Standard moderation tools", "rank": 50,
+                  "permissions": ("category.moderation", "command.dashboard")},
+    "trial_moderator": {"name": "Trial Moderator", "description": "Limited moderation tools", "rank": 20,
+                         "permissions": ("command.mute", "command.unmute", "command.purge")},
+    "event_manager": {"name": "Event Manager", "description": "Event and game tools", "rank": 30,
+                      "permissions": ("command.dashboard",)},
+    "economy_manager": {"name": "Economy Manager", "description": "Economy-management tools", "rank": 30,
+                        "permissions": ("category.economy", "command.dashboard")},
+}
+
+# These change server state, affect other members, or control the bot itself.
+# They start denied to normal members; owners grant them deliberately.  Every
+# other registered command defaults to public, and any command can still be
+# explicitly allowed or denied by a rule.
+PROTECTED_COMMANDS = {
+    "permissions", "giveperm", "takeperm", "botperm", "setprefix", "selfprefix", "setnick",
+    "mute", "unmute", "ban", "unban", "purge", "purgereaction", "role", "setrole", "roleroulette",
+    "modlogs", "toggle_spawn", "spam", "stop", "massban", "massunban", "setperm", "all", "number", "date",
+}
+
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS bot_permission_roles (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    rank INTEGER NOT NULL DEFAULT 0,
+    created_by BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guild_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS bot_role_memberships (
+    guild_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL REFERENCES bot_permission_roles(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL,
+    assigned_by BIGINT,
+    assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (guild_id, role_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS bot_permission_rules (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    subject_type TEXT NOT NULL CHECK (subject_type IN ('member', 'role', 'user')),
+    subject_id BIGINT,
+    permission_key TEXT NOT NULL,
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('guild', 'category', 'channel')),
+    scope_id BIGINT,
+    effect TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+    created_by BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((subject_type = 'member' AND subject_id IS NULL) OR
+           (subject_type <> 'member' AND subject_id IS NOT NULL)),
+    CHECK ((scope_type = 'guild' AND scope_id IS NULL) OR
+           (scope_type <> 'guild' AND scope_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_bot_permission_rules_lookup
+    ON bot_permission_rules (guild_id, subject_type, subject_id, scope_type, scope_id);
+
+CREATE TABLE IF NOT EXISTS bot_permission_audit_log (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    actor_id BIGINT NOT NULL,
+    action TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bot_permission_migrations (
+    name TEXT PRIMARY KEY,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bot_command_catalog (
+    command_path TEXT PRIMARY KEY,
+    permission_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL,
+    default_access TEXT NOT NULL CHECK (default_access IN ('public', 'protected', 'owner_only')),
+    command_kind TEXT NOT NULL,
+    discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+
+async def initialize_permission_system(pool) -> None:
+    """Create tables and import the old internal roles exactly once per row."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(SCHEMA_SQL)
+            # Import existing data once.  The old tables are never consulted by
+            # policy evaluation; this is a safe, reversible migration path.
+            migrated = await conn.fetchval("SELECT 1 FROM bot_permission_migrations WHERE name = 'legacy-v1'")
+            if migrated:
+                return
+            has_legacy = await conn.fetchval("SELECT to_regclass('public.roles') IS NOT NULL")
+            if not has_legacy:
+                await conn.execute("INSERT INTO bot_permission_migrations (name) VALUES ('legacy-v1')")
+                return
+            legacy_rows = await conn.fetch("SELECT guild_id, user_id, role, level FROM roles WHERE role IN ('moderator', 'admin', 'authorized')")
+            for row in legacy_rows:
+                role_id = await conn.fetchval(
+                    """INSERT INTO bot_permission_roles (guild_id, name, description, rank)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (guild_id, name) DO UPDATE SET name = EXCLUDED.name
+                       RETURNING id""",
+                    row["guild_id"], row["role"].title(), "Migrated from Slickey's legacy permission system", row["level"],
+                )
+                await conn.execute(
+                    """INSERT INTO bot_role_memberships (guild_id, role_id, user_id)
+                       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+                    row["guild_id"], role_id, row["user_id"],
+                )
+            for row in await conn.fetch("SELECT guild_id, user_id, command_name FROM command_permissions"):
+                await conn.execute(
+                    """INSERT INTO bot_permission_rules
+                       (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
+                       VALUES ($1, 'user', $2, $3, 'guild', NULL, 'allow', NULL)""",
+                    row["guild_id"], row["user_id"], f"command.{row['command_name'].lower()}",
+                )
+            for row in await conn.fetch("SELECT guild_id, user_id, command_name FROM blocked_commands"):
+                await conn.execute(
+                    """INSERT INTO bot_permission_rules
+                       (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
+                       VALUES ($1, 'user', $2, $3, 'guild', NULL, 'deny', NULL)""",
+                    row["guild_id"], row["user_id"], f"command.{row['command_name'].lower()}",
+                )
+            await conn.execute("INSERT INTO bot_permission_migrations (name) VALUES ('legacy-v1')")
+
+
+async def sync_command_catalog(pool, bot: commands.Bot) -> set[str]:
+    """Register every loaded command and fail closed until it is classified."""
+    if pool is None:
+        return set()
+    entries: dict[str, tuple[str, str, str, str, str]] = {}
+    review_required: set[str] = set()
+    for command in bot.commands:
+        if command.name == "help":
+            continue
+        path = command.qualified_name.lower()
+        name = command.name.lower()
+        known = name in COMMAND_CATEGORIES or name in PROTECTED_COMMANDS
+        category = COMMAND_CATEGORIES.get(name, "general")
+        access = "protected" if name in PROTECTED_COMMANDS or not known else "public"
+        if not known:
+            review_required.add(name)
+        entries[f"prefix:{path}"] = (f"command.{name}", command.name.replace("_", " ").title(), command.help or command.description or "", category, access)
+    for command in bot.tree.walk_commands():
+        if isinstance(command, app_commands.Group):
+            continue
+        path = command.qualified_name.lower()
+        name = path.split()[-1]
+        root = path.split()[0]
+        known = root in COMMAND_CATEGORIES or name in COMMAND_CATEGORIES or root in PROTECTED_COMMANDS or name in PROTECTED_COMMANDS
+        category = COMMAND_CATEGORIES.get(root, COMMAND_CATEGORIES.get(name, "general"))
+        access = "protected" if root in PROTECTED_COMMANDS or name in PROTECTED_COMMANDS or not known else "public"
+        if not known:
+            review_required.add(root)
+        entries[f"slash:{path}"] = (f"command.{root}", path.replace("_", " ").title(), command.description or "", category, access)
+    async with pool.acquire() as conn:
+        for path, (permission_key, label, description, category, access) in entries.items():
+            await conn.execute(
+                """INSERT INTO bot_command_catalog (command_path, permission_key, display_name, description, category, default_access, command_kind)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)
+                   ON CONFLICT (command_path) DO UPDATE SET permission_key=EXCLUDED.permission_key, display_name=EXCLUDED.display_name,
+                   description=EXCLUDED.description, category=EXCLUDED.category, default_access=EXCLUDED.default_access,
+                   command_kind=EXCLUDED.command_kind, updated_at=NOW()""",
+                path, permission_key, label, description[:500], category, access, path.split(":", 1)[0],
+            )
+    bot._slickey_unclassified_commands = review_required
+    return review_required
+
+
+def is_broad_deny(permission_key: str, scope_type: str, effect: str) -> bool:
+    """Broad denies can unexpectedly lock down a server, so require confirmation."""
+    return effect == "deny" and (scope_type == "guild" or permission_key in {"*", "command.*", "category.*"})
+
+
+async def create_preset(pool, *, guild_id: int, preset_key: str, actor_id: int) -> int:
+    preset = ROLE_PRESETS.get(preset_key)
+    if not preset:
+        raise ValueError("Unknown role preset")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            role_id = await conn.fetchval(
+                """INSERT INTO bot_permission_roles (guild_id, name, description, rank, created_by)
+                   VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+                guild_id, preset["name"], preset["description"], preset["rank"], actor_id,
+            )
+            for permission_key in preset["permissions"]:
+                await conn.execute(
+                    """INSERT INTO bot_permission_rules
+                       (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
+                       VALUES ($1, 'role', $2, $3, 'guild', NULL, 'allow', $4)""",
+                    guild_id, role_id, permission_key, actor_id,
+                )
+    return role_id
+
+
+def command_keys(command_name: str, category: Optional[str] = None) -> tuple[str, ...]:
+    name = command_name.lower().strip().replace("/", "")
+    category = category or COMMAND_CATEGORIES.get(name, "general")
+    return (f"command.{name}", f"category.{category}", "command.*", "category.*", "*")
+
+
+def default_allowed(command_name: str) -> bool:
+    return command_name.lower().strip().replace("/", "") not in PROTECTED_COMMANDS
+
+
+def _scope_candidates(channel_id: Optional[int], category_id: Optional[int]) -> tuple[tuple[str, Optional[int]], ...]:
+    candidates: list[tuple[str, Optional[int]]] = []
+    if channel_id is not None:
+        candidates.append(("channel", channel_id))
+    if category_id is not None:
+        candidates.append(("category", category_id))
+    candidates.append(("guild", None))
+    return tuple(candidates)
+
+
+async def evaluate(
+    pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], command_name: str,
+    channel_id: Optional[int] = None, category_id: Optional[int] = None,
+    strict_unclassified: bool = False,
+) -> PermissionDecision:
+    """Evaluate a policy.  Specific deny wins; otherwise specific allow wins.
+
+    A command with no matching policy stays available. This preserves existing
+    public-command behaviour while servers progressively add their own rules.
+    """
+    if user_id == BOT_CREATOR_ID:
+        return PermissionDecision(True, "Bot Creator bypass", trace=({"kind": "bypass", "label": "Bot Creator has permanent access."},))
+    if guild_owner_id is not None and user_id == guild_owner_id:
+        return PermissionDecision(True, "Current Discord server owner", trace=({"kind": "bypass", "label": "Current Discord server owner has permanent access."},))
+    if pool is None:
+        allowed = default_allowed(command_name) and not strict_unclassified
+        return PermissionDecision(allowed, "Permission database unavailable; protected commands fail closed", trace=({"kind": "fallback", "label": "Permission database unavailable.", "outcome": "Allowed public command" if allowed else "Denied protected command"},))
+
+    keys = command_keys(command_name)
+    async with pool.acquire() as conn:
+        role_ids = await conn.fetch(
+            "SELECT role_id FROM bot_role_memberships WHERE guild_id = $1 AND user_id = $2", guild_id, user_id
+        )
+        subject_pairs = [("member", None), ("user", user_id)]
+        subject_pairs.extend(("role", row["role_id"]) for row in role_ids)
+        rules = await conn.fetch("SELECT id, subject_type, subject_id, permission_key, scope_type, scope_id, effect FROM bot_permission_rules WHERE guild_id = $1", guild_id)
+
+    scope_rank = {"guild": 0, "category": 1, "channel": 2}
+    subject_rank = {"member": 0, "role": 1, "user": 2}
+    key_rank = {key: len(keys) - index for index, key in enumerate(keys)}
+    candidates = []
+    allowed_subjects = set(subject_pairs)
+    allowed_scopes = set(_scope_candidates(channel_id, category_id))
+    for rule in rules:
+        if (rule["subject_type"], rule["subject_id"]) not in allowed_subjects:
+            continue
+        if (rule["scope_type"], rule["scope_id"]) not in allowed_scopes or rule["permission_key"] not in key_rank:
+            continue
+        # More concrete key/scope/subject always wins. At the same specificity,
+        # deny is intentionally safer than allow.
+        rank = (scope_rank[rule["scope_type"]], key_rank[rule["permission_key"]], subject_rank[rule["subject_type"]], 1 if rule["effect"] == "deny" else 0)
+        candidates.append((rank, rule))
+    if not candidates:
+        if default_allowed(command_name) and not strict_unclassified:
+            return PermissionDecision(True, "Public command default", trace=({"kind": "default", "label": "No matching policy. This command is public by default."},))
+        label = "This command has not yet been classified in the catalogue." if strict_unclassified else "No matching allow policy. This command is protected by default."
+        return PermissionDecision(False, "Protected command; no allow rule", trace=({"kind": "default", "label": label},))
+    ordered = sorted(candidates, key=lambda item: item[0], reverse=True)
+    _, rule = ordered[0]
+    trace = tuple({
+        "kind": "rule", "id": item[1]["id"], "effect": item[1]["effect"],
+        "permission_key": item[1]["permission_key"], "subject_type": item[1]["subject_type"],
+        "subject_id": item[1]["subject_id"], "scope_type": item[1]["scope_type"],
+        "scope_id": item[1]["scope_id"], "selected": index == 0,
+    } for index, item in enumerate(ordered))
+    return PermissionDecision(rule["effect"] == "allow", f"{rule['effect'].title()} rule #{rule['id']}", rule["id"], trace)
+
+
+async def actor_can_manage(pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], action: str) -> bool:
+    if is_superuser(user_id, guild_owner_id):
+        return True
+    decision = await evaluate(pool, guild_id=guild_id, user_id=user_id, guild_owner_id=guild_owner_id, command_name="permissions")
+    return decision.allowed and decision.matched_rule_id is not None
+
+
+async def actor_can_delegate_permission(pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], permission_key: str) -> bool:
+    """Delegates may grant only authority they personally hold."""
+    if is_superuser(user_id, guild_owner_id):
+        return True
+    key = permission_key.lower().strip()
+    if key.startswith("command.") and key != "command.*":
+        probe = key.removeprefix("command.")
+    elif key.startswith("category.") and key != "category.*":
+        probe = next((name for name, category in COMMAND_CATEGORIES.items() if category == key.removeprefix("category.")), "__no_such_command__")
+    else:
+        probe = "__delegation_probe__"
+    decision = await evaluate(pool, guild_id=guild_id, user_id=user_id, guild_owner_id=guild_owner_id, command_name=probe)
+    return decision.allowed and decision.matched_rule_id is not None
+
+
+async def actor_can_delegate_preset(pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], preset_key: str) -> bool:
+    """A preset is a bundle of grants, so it must obey the same ceiling as a rule."""
+    preset = ROLE_PRESETS.get(preset_key)
+    if not preset:
+        return False
+    return all(await actor_can_delegate_permission(
+        pool, guild_id=guild_id, user_id=user_id, guild_owner_id=guild_owner_id,
+        permission_key=permission,
+    ) for permission in preset["permissions"])
+
+
+async def permission_key_is_registered(pool, permission_key: str) -> bool:
+    """Allow only catalogue-backed command keys plus intentional policy wildcards."""
+    key = permission_key.lower().strip()
+    if key in {"*", "command.*", "category.*", "command.dashboard"}:
+        return True
+    if key.startswith("category."):
+        return key.removeprefix("category.") in set(COMMAND_CATEGORIES.values())
+    if not key.startswith("command."):
+        return False
+    return bool(await pool.fetchval(
+        "SELECT 1 FROM bot_command_catalog WHERE permission_key = $1 LIMIT 1", key
+    ))
+
+
+async def effective_rank(pool, guild_id: int, user_id: int) -> int:
+    """Highest custom-role rank. Rank only protects targets; it grants nothing."""
+    if pool is None:
+        return 0
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """SELECT COALESCE(MAX(r.rank), 0) FROM bot_permission_roles r
+               JOIN bot_role_memberships m ON m.role_id = r.id
+               WHERE m.guild_id = $1 AND m.user_id = $2""", guild_id, user_id
+        ) or 0
+
+
+class PermissionsCog(commands.Cog):
+    """The Discord management surface for the policy system.
+
+    Rule subjects use role IDs (shown after creation) or Discord user IDs.  This
+    keeps policy records stable when a role's display name changes.
+    """
+
+    permissions = app_commands.Group(name="permissions", description="Manage Slickey's custom permissions")
+
+    def __init__(self, bot: commands.Bot, pool_getter):
+        self.bot = bot
+        self.pool_getter = pool_getter
+
+    async def _manager(self, interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return False
+        allowed = await actor_can_manage(
+            self.pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id,
+            guild_owner_id=interaction.guild.owner_id, action="manage",
+        )
+        if not allowed:
+            await interaction.response.send_message(
+                "You need the custom `command.permissions` permission to manage Slickey roles and rules.", ephemeral=True
+            )
+        return allowed
+
+    async def _can_manage_rank(self, interaction: discord.Interaction, target_rank: int) -> bool:
+        """Delegates may only change roles and people below their own rank."""
+        if is_superuser(interaction.user.id, interaction.guild.owner_id):
+            return True
+        actor_rank = await effective_rank(self.pool_getter(), interaction.guild.id, interaction.user.id)
+        if actor_rank > target_rank:
+            return True
+        await interaction.response.send_message(
+            "You can only manage custom roles and members below your own role rank.", ephemeral=True
+        )
+        return False
+
+    @permissions.command(name="role-create", description="Create a server-specific Slickey role")
+    async def role_create(self, interaction: discord.Interaction, name: str, description: str = "", rank: int = 0):
+        if not await self._manager(interaction):
+            return
+        if not await self._can_manage_rank(interaction, rank):
+            return
+        name = name.strip()
+        if not name or len(name) > 80:
+            await interaction.response.send_message("Role names must be 1–80 characters.", ephemeral=True)
+            return
+        try:
+            role_id = await self.pool_getter().fetchval(
+                """INSERT INTO bot_permission_roles (guild_id, name, description, rank, created_by)
+                   VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+                interaction.guild.id, name, description[:500], rank, interaction.user.id,
+            )
+        except Exception as exc:
+            await interaction.response.send_message(f"Could not create that role: {exc}", ephemeral=True)
+            return
+        await self._audit(interaction, "role.create", {"role_id": role_id, "name": name})
+        await interaction.response.send_message(f"Created `{name}` (role ID: `{role_id}`).", ephemeral=True)
+
+    @permissions.command(name="role-list", description="List this server's custom Slickey roles")
+    async def role_list(self, interaction: discord.Interaction):
+        if not await self._manager(interaction):
+            return
+        rows = await self.pool_getter().fetch(
+            """SELECT r.id, r.name, r.rank, COUNT(m.user_id) AS members
+               FROM bot_permission_roles r
+               LEFT JOIN bot_role_memberships m ON m.role_id = r.id
+               WHERE r.guild_id = $1
+               GROUP BY r.id, r.name, r.rank ORDER BY r.rank DESC, r.name LIMIT 50""", interaction.guild.id
+        )
+        if not rows:
+            await interaction.response.send_message("No custom Slickey roles yet.", ephemeral=True)
+            return
+        lines = [f"`{row['id']}` — **{row['name']}** (rank {row['rank']}, {row['members']} members)" for row in rows]
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @permissions.command(name="role-delete", description="Delete a custom Slickey role and its role rules")
+    async def role_delete(self, interaction: discord.Interaction, role_id: int):
+        if not await self._manager(interaction):
+            return
+        target_rank = await self.pool_getter().fetchval("SELECT rank FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", role_id, interaction.guild.id)
+        if target_rank is None or not await self._can_manage_rank(interaction, target_rank):
+            return
+        async with self.pool_getter().acquire() as conn:
+            async with conn.transaction():
+                exists = await conn.fetchval("SELECT 1 FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", role_id, interaction.guild.id)
+                if not exists:
+                    await interaction.response.send_message("That custom role does not exist in this server.", ephemeral=True)
+                    return
+                await conn.execute("DELETE FROM bot_permission_rules WHERE guild_id = $1 AND subject_type = 'role' AND subject_id = $2", interaction.guild.id, role_id)
+                await conn.execute("DELETE FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", role_id, interaction.guild.id)
+        await self._audit(interaction, "role.delete", {"role_id": role_id})
+        await interaction.response.send_message(f"Deleted role `{role_id}` and its rules.", ephemeral=True)
+
+    @permissions.command(name="role-assign", description="Assign a custom Slickey role to a member")
+    async def role_assign(self, interaction: discord.Interaction, member: discord.Member, role_id: int):
+        if not await self._manager(interaction):
+            return
+        target_rank = await self.pool_getter().fetchval(
+            "SELECT rank FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", role_id, interaction.guild.id
+        )
+        if target_rank is None:
+            await interaction.response.send_message("That custom role does not exist in this server.", ephemeral=True)
+            return
+        if not await self._can_manage_rank(interaction, target_rank):
+            return
+        await self.pool_getter().execute(
+            """INSERT INTO bot_role_memberships (guild_id, role_id, user_id, assigned_by)
+               VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING""",
+            interaction.guild.id, role_id, member.id, interaction.user.id,
+        )
+        await self._audit(interaction, "role.assign", {"role_id": role_id, "user_id": member.id})
+        await interaction.response.send_message(f"Assigned role `{role_id}` to {member.mention}.", ephemeral=True)
+
+    @permissions.command(name="role-remove", description="Remove a custom Slickey role from a member")
+    async def role_remove(self, interaction: discord.Interaction, member: discord.Member, role_id: int):
+        if not await self._manager(interaction):
+            return
+        target_rank = await self.pool_getter().fetchval("SELECT rank FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", role_id, interaction.guild.id)
+        if target_rank is None or not await self._can_manage_rank(interaction, target_rank):
+            return
+        await self.pool_getter().execute(
+            "DELETE FROM bot_role_memberships WHERE guild_id = $1 AND role_id = $2 AND user_id = $3",
+            interaction.guild.id, role_id, member.id,
+        )
+        await self._audit(interaction, "role.remove", {"role_id": role_id, "user_id": member.id})
+        await interaction.response.send_message(f"Removed role `{role_id}` from {member.mention}.", ephemeral=True)
+
+    @permissions.command(name="rule-add", description="Add an allow or deny rule")
+    @app_commands.choices(
+        subject_type=[app_commands.Choice(name="Everyone (Member)", value="member"), app_commands.Choice(name="Custom role", value="role"), app_commands.Choice(name="Specific user", value="user")],
+        effect=[app_commands.Choice(name="Allow", value="allow"), app_commands.Choice(name="Deny", value="deny")],
+        scope_type=[app_commands.Choice(name="Entire server", value="guild"), app_commands.Choice(name="Discord category", value="category"), app_commands.Choice(name="Discord channel", value="channel")],
+    )
+    async def rule_add(self, interaction: discord.Interaction, subject_type: app_commands.Choice[str], permission: str,
+                       effect: app_commands.Choice[str], scope_type: app_commands.Choice[str], subject_id: Optional[str] = None,
+                       scope_id: Optional[str] = None, confirm_broad_deny: bool = False):
+        if not await self._manager(interaction):
+            return
+        permission = permission.lower().strip()
+        if not permission or len(permission) > 150 or any(char.isspace() for char in permission):
+            await interaction.response.send_message("Permission must be a short key such as `command.ban`, `category.moderation`, or `command.*`.", ephemeral=True)
+            return
+        try:
+            parsed_subject = None if subject_type.value == "member" else int(subject_id or "")
+            parsed_scope = None if scope_type.value == "guild" else int(scope_id or "")
+        except ValueError:
+            await interaction.response.send_message("A role/user ID or category/channel ID is missing or invalid.", ephemeral=True)
+            return
+        if is_broad_deny(permission, scope_type.value, effect.value) and not confirm_broad_deny:
+            await interaction.response.send_message("This broad deny can lock down a server. Run it again with `confirm_broad_deny: True` if that is intentional.", ephemeral=True)
+            return
+        if not await permission_key_is_registered(self.pool_getter(), permission):
+            await interaction.response.send_message("That permission is not in the command catalogue. Sync the bot first or choose a listed command/category.", ephemeral=True)
+            return
+        if effect.value == "allow" and not await actor_can_delegate_permission(
+            self.pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id,
+            guild_owner_id=interaction.guild.owner_id, permission_key=permission,
+        ):
+            await interaction.response.send_message("You can only grant permissions you already hold yourself.", ephemeral=True)
+            return
+        if subject_type.value == "role":
+            target_rank = await self.pool_getter().fetchval("SELECT rank FROM bot_permission_roles WHERE id = $1 AND guild_id = $2", parsed_subject, interaction.guild.id)
+            if target_rank is None or not await self._can_manage_rank(interaction, target_rank):
+                return
+        if subject_type.value == "user" and interaction.guild.get_member(parsed_subject) is None:
+            await interaction.response.send_message("That user is not a member of this server.", ephemeral=True)
+            return
+        if scope_type.value != "guild":
+            scope = interaction.guild.get_channel(parsed_scope)
+            valid_scope = scope is not None and ((scope_type.value == "category" and isinstance(scope, discord.CategoryChannel)) or (scope_type.value == "channel" and not isinstance(scope, discord.CategoryChannel)))
+            if not valid_scope:
+                await interaction.response.send_message("The selected scope does not exist in this server or has the wrong type.", ephemeral=True)
+                return
+        rule_id = await self.pool_getter().fetchval(
+            """INSERT INTO bot_permission_rules
+               (guild_id, subject_type, subject_id, permission_key, scope_type, scope_id, effect, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""",
+            interaction.guild.id, subject_type.value, parsed_subject, permission, scope_type.value, parsed_scope, effect.value, interaction.user.id,
+        )
+        await self._audit(interaction, "rule.add", {"rule_id": rule_id, "permission": permission, "effect": effect.value})
+        await interaction.response.send_message(f"Created {effect.value} rule `{rule_id}` for `{permission}`.", ephemeral=True)
+
+    @permissions.command(name="role-preset", description="Create an editable Slickey role from a safe preset")
+    @app_commands.choices(preset=[app_commands.Choice(name=value["name"], value=key) for key, value in ROLE_PRESETS.items()])
+    async def role_preset(self, interaction: discord.Interaction, preset: app_commands.Choice[str]):
+        if not await self._manager(interaction):
+            return
+        preset_data = ROLE_PRESETS[preset.value]
+        if not await self._can_manage_rank(interaction, preset_data["rank"]):
+            return
+        if not await actor_can_delegate_preset(
+            self.pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id,
+            guild_owner_id=interaction.guild.owner_id, preset_key=preset.value,
+        ):
+            await interaction.response.send_message("You can only create a preset whose permissions you already hold.", ephemeral=True)
+            return
+        try:
+            role_id = await create_preset(self.pool_getter(), guild_id=interaction.guild.id, preset_key=preset.value, actor_id=interaction.user.id)
+        except Exception as exc:
+            await interaction.response.send_message(f"Could not create preset: {exc}", ephemeral=True)
+            return
+        await self._audit(interaction, "role.preset", {"preset": preset.value, "role_id": role_id})
+        await interaction.response.send_message(f"Created the **{preset_data['name']}** preset (role ID: `{role_id}`).", ephemeral=True)
+
+    @permissions.command(name="rule-remove", description="Remove an allow or deny rule")
+    async def rule_remove(self, interaction: discord.Interaction, rule_id: int):
+        if not await self._manager(interaction):
+            return
+        rule = await self.pool_getter().fetchrow(
+            "SELECT subject_type, subject_id FROM bot_permission_rules WHERE guild_id = $1 AND id = $2",
+            interaction.guild.id, rule_id,
+        )
+        if not rule:
+            await interaction.response.send_message("That rule was not found.", ephemeral=True)
+            return
+        if rule["subject_type"] == "role":
+            target_rank = await self.pool_getter().fetchval(
+                "SELECT rank FROM bot_permission_roles WHERE guild_id = $1 AND id = $2", interaction.guild.id, rule["subject_id"]
+            )
+            if target_rank is None or not await self._can_manage_rank(interaction, target_rank):
+                return
+        result = await self.pool_getter().execute(
+            "DELETE FROM bot_permission_rules WHERE guild_id = $1 AND id = $2", interaction.guild.id, rule_id
+        )
+        await self._audit(interaction, "rule.remove", {"rule_id": rule_id})
+        await interaction.response.send_message("Rule removed." if result.endswith("1") else "That rule was not found.", ephemeral=True)
+
+    @permissions.command(name="rule-list", description="List this server's custom permission rules")
+    async def rule_list(self, interaction: discord.Interaction):
+        if not await self._manager(interaction):
+            return
+        rows = await self.pool_getter().fetch(
+            """SELECT id, subject_type, subject_id, effect, permission_key, scope_type, scope_id
+               FROM bot_permission_rules WHERE guild_id = $1 ORDER BY id DESC LIMIT 50""", interaction.guild.id
+        )
+        if not rows:
+            await interaction.response.send_message("No custom rules yet.", ephemeral=True)
+            return
+        lines = []
+        for row in rows:
+            subject = "everyone" if row["subject_type"] == "member" else f"{row['subject_type']}:{row['subject_id']}"
+            scope = "server" if row["scope_type"] == "guild" else f"{row['scope_type']}:{row['scope_id']}"
+            lines.append(f"`{row['id']}` — **{row['effect']}** `{row['permission_key']}` for {subject} in {scope}")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @permissions.command(name="test", description="Explain whether a member can use a command here")
+    async def test(self, interaction: discord.Interaction, member: discord.Member, command: str):
+        if not await self._manager(interaction):
+            return
+        channel = interaction.channel
+        decision = await evaluate(
+            self.pool_getter(), guild_id=interaction.guild.id, user_id=member.id, guild_owner_id=interaction.guild.owner_id,
+            command_name=command, channel_id=getattr(channel, "id", None), category_id=getattr(channel, "category_id", None),
+        )
+        verdict = "Allowed" if decision.allowed else "Denied"
+        await interaction.response.send_message(f"**{verdict}** for {member.mention}: {decision.reason}.", ephemeral=True)
+
+    async def _audit(self, interaction: discord.Interaction, action: str, payload: dict) -> None:
+        await self.pool_getter().execute(
+            "INSERT INTO bot_permission_audit_log (guild_id, actor_id, action, payload) VALUES ($1, $2, $3, $4::jsonb)",
+            interaction.guild.id, interaction.user.id, action, __import__("json").dumps(payload),
+        )
+
+
+def install(bot: commands.Bot, pool_getter) -> None:
+    """Install universal checks once, so every command honours deny policies."""
+    if getattr(bot, "_slickey_permission_system_installed", False):
+        return
+    bot._slickey_permission_system_installed = True
+
+    async def prefix_check(ctx: commands.Context) -> bool:
+        if ctx.guild is None or ctx.command is None:
+            return True
+        decision = await evaluate(
+            pool_getter(), guild_id=ctx.guild.id, user_id=ctx.author.id, guild_owner_id=ctx.guild.owner_id,
+            command_name=ctx.command.name, channel_id=getattr(ctx.channel, "id", None), category_id=getattr(ctx.channel, "category_id", None),
+            strict_unclassified=ctx.command.name.lower() in getattr(bot, "_slickey_unclassified_commands", set()),
+        )
+        if decision.allowed:
+            return True
+        await ctx.reply(f"You cannot use `{ctx.command.name}` here. {decision.reason}.")
+        return False
+
+    async def slash_check(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None or interaction.command is None:
+            return True
+        decision = await evaluate(
+            pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id, guild_owner_id=interaction.guild.owner_id,
+            command_name=interaction.command.name, channel_id=getattr(interaction.channel, "id", None),
+            category_id=getattr(interaction.channel, "category_id", None),
+            strict_unclassified=interaction.command.name.lower() in getattr(bot, "_slickey_unclassified_commands", set()),
+        )
+        if decision.allowed:
+            return True
+        await interaction.response.send_message(f"You cannot use `/{interaction.command.name}` here. {decision.reason}.", ephemeral=True)
+        return False
+
+    bot.add_check(prefix_check)
+    # discord.py's CommandTree exposes one global interaction_check hook (it
+    # does not provide Bot.add_check's multi-check API).
+    bot.tree.interaction_check = slash_check

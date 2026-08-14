@@ -21,6 +21,7 @@ import os
 import re
 from typing import Optional
 from dotenv import load_dotenv
+from permission_system import BOT_CREATOR_ID, effective_rank, evaluate, initialize_permission_system
 load_dotenv()
 
 
@@ -41,6 +42,7 @@ async def init_db_pool():
             statement_cache_size=0,
             max_inactive_connection_lifetime=120.0,
             command_timeout=20.0)
+        await initialize_permission_system(db_pool)
         print("Postgres pool initialized!")
     except Exception as e:
         print(f"Pool creation failed: {e}")
@@ -154,7 +156,9 @@ async def init_db_pool():
 #    await ctx.send(f"Your slave **{slave_entry.display_name}** has been unbanned by **{ctx.author.mention}**.")
 
 
-BOT_OWNER_ID = 1068465457910267975
+# Compatibility alias used by legacy command handlers.  This is the Bot
+# Creator bypass, not a server owner; the real owner is resolved from Discord.
+BOT_OWNER_ID = BOT_CREATOR_ID
 
 active_role_timers = {}
 role_list_for_command = {}
@@ -710,6 +714,8 @@ def determine_winner(game):
 
 
 
+# <---REMOVE---> Superseded permission compatibility block; the active v2
+# helpers are defined near the end of this module.
 PERM_LEVELS = {
     'normal': 0,
     'command': 1,
@@ -720,40 +726,8 @@ PERM_LEVELS = {
 }
 
 async def get_user_level(guild_id: int, user_id: int):
-
-    if db_pool is None:
-        return 0
-    #levels = [('owner', 5), ('authorized', 4), ('admin', 3), ('moderator', 2), ('command', 1), ('normal', 0)]
-
-    sql = """
-    SELECT
-      CASE
-        WHEN EXISTS(
-          SELECT 1 FROM roles
-           WHERE guild_id = $1 AND user_id = $2 AND role = 'owner'
-        ) THEN 5
-        WHEN EXISTS(
-          SELECT 1 FROM roles
-           WHERE guild_id = $1 AND user_id = $2 AND role = 'authorized'
-        ) THEN 4
-        WHEN EXISTS(
-          SELECT 1 FROM roles
-           WHERE guild_id = $1 AND user_id = $2 AND role = 'admin'
-        ) THEN 3
-        WHEN EXISTS(
-          SELECT 1 FROM roles
-           WHERE guild_id = $1 AND user_id = $2 AND role = 'moderator'
-        ) THEN 2
-        WHEN EXISTS(
-          SELECT 1 FROM roles
-           WHERE guild_id = $1 AND user_id = $2 AND role = 'command'
-        ) THEN 1
-        ELSE 0
-      END AS level;
-    """
-
-    level = await db_pool.fetchval(sql, guild_id, user_id)
-    return level if level is not None else 0
+    """Compatibility helper returning custom-role rank, never a legacy level."""
+    return await effective_rank(db_pool, guild_id, user_id)
 
 
 async def only_for_setprefix(guild_id: int, user_id: int) -> bool:
@@ -780,6 +754,20 @@ async def is_authorized_or_not(context, guild_id: int, user_id: int, command_nam
         reply = context.reply
     else:
         raise ValueError("Invalid object passed: must be a Context or Interaction.")
+
+    decision = await evaluate(
+        db_pool, guild_id=guild_id, user_id=user_id, guild_owner_id=getattr(guild, "owner_id", None),
+        command_name=command_name, channel_id=getattr(context.channel, "id", None),
+        category_id=getattr(context.channel, "category_id", None),
+    )
+    if not decision.allowed:
+        await reply(f"You are blocked from using {command_name} command. {decision.reason}.")
+        return False
+
+    # An explicit new-policy allow is authoritative.  Otherwise, retain the
+    # historical ladder until every command has been migrated from it.
+    if decision.matched_rule_id is not None or decision.reason in {"Bot Creator bypass", "Current Discord server owner"}:
+        return True
 
     if await is_command_blocked(guild_id, user_id, command_name):
         await reply(f"You are blocked from using {command_name} command.")
@@ -847,7 +835,16 @@ async def permissions_check_decorator(context, target, command_name):
     else:
         raise ValueError("Invalid object passed: must be a Context or Interaction.")
 
-    if author.id == BOT_OWNER_ID:
+    decision = await evaluate(
+        db_pool, guild_id=guild.id, user_id=author.id, guild_owner_id=getattr(guild, "owner_id", None),
+        command_name=command_name, channel_id=getattr(context.channel, "id", None),
+        category_id=getattr(context.channel, "category_id", None),
+    )
+    if not decision.allowed:
+        await reply_method(f"You are blocked from using `{command_name}`. {decision.reason}.")
+        return False
+
+    if author.id == BOT_OWNER_ID or decision.matched_rule_id is not None or decision.reason == "Current Discord server owner":
         return True
 
     author_level = await get_user_level(guild.id, author.id)
@@ -883,8 +880,7 @@ async def permissions_check_decorator(context, target, command_name):
             break
 
     return True
-
-
+# <---REMOVE--->
 
 def format_timedelta(td):
     """Formats a timedelta into a user-friendly string."""
@@ -1752,3 +1748,48 @@ async def generate_leaderboard_image(ctx, guild, leaderboard_type, data, prev_da
 
     draw.text((10, 10), mode, font=font_large, fill=(255, 255, 255))
     return base_img
+
+
+# Permission-system v2 compatibility overrides. Legacy tables remain only as
+# historical data; all active command decisions now use permission_system.py.
+async def get_user_level(guild_id: int, user_id: int):
+    return await effective_rank(db_pool, guild_id, user_id)
+
+
+async def only_for_setprefix(guild_id: int, user_id: int) -> bool:
+    return await effective_rank(db_pool, guild_id, user_id) > 0
+
+
+async def is_command_blocked(guild_id: int, user_id: int, command_name: str) -> bool:
+    return False
+
+
+async def has_command_permission(guild_id: int, user_id: int, command_name: str) -> bool:
+    return False
+
+
+async def is_authorized_or_not(context, guild_id: int, user_id: int, command_name: str) -> bool:
+    guild = context.guild
+    reply = (lambda message: context.response.send_message(message, ephemeral=True)) if hasattr(context, "user") else context.reply
+    decision = await evaluate(db_pool, guild_id=guild_id, user_id=user_id, guild_owner_id=getattr(guild, "owner_id", None), command_name=command_name, channel_id=getattr(context.channel, "id", None), category_id=getattr(context.channel, "category_id", None))
+    if decision.allowed:
+        return True
+    await reply(f"You cannot use `{command_name}` here. {decision.reason}.")
+    return False
+
+
+async def permissions_check_decorator(context, target, command_name: str) -> bool:
+    author = context.user if hasattr(context, "user") else context.author
+    guild = context.guild
+    reply = (lambda message: context.response.send_message(message, ephemeral=True)) if hasattr(context, "user") else context.reply
+    decision = await evaluate(db_pool, guild_id=guild.id, user_id=author.id, guild_owner_id=getattr(guild, "owner_id", None), command_name=command_name, channel_id=getattr(context.channel, "id", None), category_id=getattr(context.channel, "category_id", None))
+    if not decision.allowed:
+        await reply(f"You cannot use `{command_name}`. {decision.reason}.")
+        return False
+    if author.id == BOT_OWNER_ID or author.id == getattr(guild, "owner_id", None):
+        return True
+    target_rank = await effective_rank(db_pool, guild.id, target.id)
+    if target_rank > 0 and await effective_rank(db_pool, guild.id, author.id) <= target_rank:
+        await reply(f"You cannot use `{command_name}` on {target.display_name}; their custom-role rank is equal to or above yours.")
+        return False
+    return True

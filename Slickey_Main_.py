@@ -16,12 +16,12 @@ from discord.utils import get
 from discord.errors import Forbidden
 #import pymysql
 import asyncpg
-import utils, Slickey_Secondary_, ai_cog
+import utils, Slickey_Secondary_, ai_cog, permission_system
 #from cachetools import TTLCache
 from dotenv import load_dotenv
 load_dotenv()
 
-from utils import (find_closest_role, find_closest_member, is_command_blocked, is_authorized_or_not, only_for_setprefix, permissions_check_decorator, PERM_LEVELS, active_role_timers, active_begging_requests, jackpot_game, active_auctions, responded_messages,
+from utils import (find_closest_role, find_closest_member, is_command_blocked, is_authorized_or_not, only_for_setprefix, permissions_check_decorator, active_role_timers, active_begging_requests, jackpot_game, active_auctions, responded_messages,
                    tower_games, jailed_users_data, PERMISSIONS_LIST, PERMISSIONS_DICT, format_timedelta, convert_to_seconds, unmute_member, key_permissions, mod_perms, admin_perms, get_message_count, get_num_slaves_owned, get_days_on_server, calculate_slave_price, get_user_balance, update_user_balance, add_transaction, is_slave, is_master, get_master_of_slave, get_top_slaves, get_slaves_of_master, has_permission_for_slave, color_wars, create_empty_grid, check_win_condition, process_chain_reactions, update_points, active_games, purchase_command_for_slave,
                    get_unpurchased_commands, generate_leaderboard, random_emojis, get_user_level, memname_choice, create_gun_config, create_game_board_embed, create_initial_game_state, calculate_hand_size, deal_cards, operation_active, get_cell_emoji, ColorWarButton, memory_games, update_game_content, determine_winner, db_pool, init_db_pool, ShopPaginationView, CategorySelect, ACTIONS)
 
@@ -89,6 +89,7 @@ async def resolve_prefix(guild_id: int | None, user_id: int) -> str:
 
 
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, help_command=None)
+permission_system.install(bot, lambda: utils.db_pool)
 
 
 
@@ -110,8 +111,10 @@ async def block_or_command_autocomplete(interaction: discord.Interaction, curren
 
 @bot.command(name="giveperm", aliases=['gp', 'GP', 'Giveperm', 'GIVEPERM', "Gp"], description="Give user permissions and roles.")
 async def give_permission(ctx, target: discord.Member, permission_type: str, command_name: str = None):
-    if ctx.author.id not in [665858014024171551, 1068465457910267975, 1112026631310159892] and not await get_user_level(
-            ctx.guild.id, ctx.author.id) == 5:
+    await ctx.reply("`giveperm` is retired. Use `/permissions role-*` and `/permissions rule-*`.")
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not permission_system.is_superuser(ctx.author.id, ctx.guild.owner_id):
         await ctx.reply("Only Server Owner can use this command.")
         return
 
@@ -170,6 +173,8 @@ async def give_permission(ctx, target: discord.Member, permission_type: str, com
             await ctx.send(f"Error: {str(e)}")
 
 
+    # <---REMOVE--->
+
 @give_permission.error
 async def give_permission_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
@@ -197,9 +202,10 @@ async def give_permission_error(ctx, error):
 @app_commands.autocomplete(command_name=block_or_command_autocomplete)
 async def give_perm(interaction: discord.Interaction, target: discord.Member, permission_type: app_commands.Choice[str],
                     command_name: str = None):
-    if interaction.user.id not in [665858014024171551, 1068465457910267975,
-                                   1112026631310159892] and not await get_user_level(interaction.guild.id,
-                                                                                     interaction.user.id) == 5:
+    await interaction.response.send_message("`giveperm` is retired. Use `/permissions role-*` and `/permissions rule-*`.", ephemeral=True)
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not permission_system.is_superuser(interaction.user.id, interaction.guild.owner_id):
         await interaction.response.send_message("Only the Server Owner can use this command.", ephemeral=True)
         return
 
@@ -259,10 +265,14 @@ async def give_perm(interaction: discord.Interaction, target: discord.Member, pe
             await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
 
+    # <---REMOVE--->
+
 @bot.command(name="takeperm", aliases=["tp", "TP", "Takeperm", "TAKEPERM", "Tp"], description="Remove user permissions and roles.")
 async def take_permission(ctx, target: discord.Member, permission_type: str, command_name: str = None):
-    if ctx.author.id not in [665858014024171551, 1068465457910267975, 1112026631310159892] and not await get_user_level(
-            ctx.guild.id, ctx.author.id) == 5:
+    await ctx.reply("`takeperm` is retired. Use `/permissions role-*` and `/permissions rule-*`.")
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not permission_system.is_superuser(ctx.author.id, ctx.guild.owner_id):
         await ctx.reply("Only Server Owner can use this command.")
         return
     async with utils.db_pool.acquire() as conn:
@@ -315,6 +325,8 @@ async def take_permission(ctx, target: discord.Member, permission_type: str, com
             await ctx.send(f"Error: {str(e)}")
 
 
+    # <---REMOVE--->
+
 @take_permission.error
 async def take_permission_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
@@ -341,7 +353,10 @@ async def take_permission_error(ctx, error):
 @app_commands.autocomplete(command_name=block_or_command_autocomplete)
 async def take_perm(interaction: discord.Interaction, target: discord.Member, permission_type: app_commands.Choice[str],
                     command_name: str = None):
-    if interaction.user.id not in [1068465457910267975] and not await get_user_level(interaction.guild.id, interaction.user.id) == 5:
+    await interaction.response.send_message("`takeperm` is retired. Use `/permissions role-*` and `/permissions rule-*`.", ephemeral=True)
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not permission_system.is_superuser(interaction.user.id, interaction.guild.owner_id):
         await interaction.response.send_message("Only the Server Owner can use this command.", ephemeral=True)
         return
 
@@ -397,10 +412,14 @@ async def take_perm(interaction: discord.Interaction, target: discord.Member, pe
             await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
 
+    # <---REMOVE--->
+
 @bot.command(name="botperm", aliases=['BOTPERM', 'bp', 'Botperm', 'BP', 'Bp'], description="List all users with roles, command permissions, and blocked commands.")
 async def list_botperms(ctx):
-    if ctx.author.id not in [1068465457910267975] and not await get_user_level(ctx.guild.id, ctx.author.id) >= 4:
-        await ctx.reply("Only Authorized and Server Owner can use this command.")
+    await ctx.reply("`botperm` is retired. Use `/permissions role-list` and `/permissions rule-list`.")
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "botperm"):
         return
 
     async with utils.db_pool.acquire(timeout=5.0) as conn:
@@ -461,10 +480,14 @@ async def list_botperms(ctx):
             await ctx.send(f"Error: {str(e)}")
 
 
+    # <---REMOVE--->
+
 @bot.tree.command(name="botperm", description="List all users with roles, command permissions, and blocked commands.")
 async def bot_perms(interaction: discord.Interaction):
-    if interaction.user.id not in [1068465457910267975] and not await get_user_level(interaction.guild.id, interaction.user.id) >= 4:
-        await interaction.response.send_message("Only Authorized and Server Owner can use this command.", ephemeral=True)
+    await interaction.response.send_message("`botperm` is retired. Use `/permissions role-list` and `/permissions rule-list`.", ephemeral=True)
+    return
+    # <---REMOVE---> legacy implementation (unreachable)
+    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "botperm"):
         return
 
     async with utils.db_pool.acquire(timeout=5.0) as conn:
@@ -826,14 +849,10 @@ async def on_member_remove(member):
         await conn.execute("DELETE FROM afk_users WHERE user_id = $1 AND guild_id = $2", str(member.id), str(member.guild.id))
         await conn.execute("DELETE FROM afk_mentions WHERE user_id = $1 AND guild_id = $2", str(member.id), str(member.guild.id))
 
-        if await conn.fetchval("SELECT 1 FROM roles WHERE guild_id = $1 AND user_id = $2", guild_id, member.id):
-            await conn.execute("DELETE FROM roles WHERE guild_id = $1 AND user_id = $2", guild_id, member.id)
-
-        if await conn.fetchval( "SELECT 1 FROM blocked_commands WHERE guild_id = $1 AND user_id = $2", guild_id, member.id):
-            await conn.execute( "DELETE FROM blocked_commands WHERE guild_id = $1 AND user_id = $2", guild_id, member.id )
-
-        if await conn.fetchval("SELECT 1 FROM command_permissions WHERE guild_id = $1 AND user_id = $2", guild_id, member.id):
-            await conn.execute("DELETE FROM command_permissions WHERE guild_id = $1 AND user_id = $2", guild_id, member.id)
+        # Custom Slickey role assignments and user-targeted policies do not
+        # survive a member leaving the server.
+        await conn.execute("DELETE FROM bot_role_memberships WHERE guild_id = $1 AND user_id = $2", guild_id, member.id)
+        await conn.execute("DELETE FROM bot_permission_rules WHERE guild_id = $1 AND subject_type = 'user' AND subject_id = $2", guild_id, member.id)
 
 
 @bot.event # This function is done with postgres modification.
@@ -957,13 +976,10 @@ async def on_guild_update(before, after):
     if setup_done == 1 and before.owner != after.owner:
         new_owner_id = after.owner.id
 
-        async with utils.db_pool.acquire() as conn:
-            await conn.execute("DELETE FROM roles WHERE guild_id = $1 AND role = $2", after.id, 'owner')
-            
-            await conn.execute("""INSERT INTO roles (guild_id, user_id, role, level) VALUES ($1, $2, $3, $4)""", after.id, new_owner_id, 'owner', PERM_LEVELS['owner'])
-                
-            if after.system_channel:
-                await after.system_channel.send(f"Owner role transferred to {after.owner.mention} due to change in server ownership.")
+        # Ownership is resolved live by permission_system.evaluate(), so no
+        # stored owner role needs updating after a Discord ownership transfer.
+        if after.system_channel:
+            await after.system_channel.send(f"Slickey ownership now follows {after.owner.mention} automatically.")
 
 
 @bot.event  # This function is done with postgres modification.
@@ -1015,9 +1031,9 @@ async def on_raw_reaction_remove(payload):
 @bot.event # This function is done with postgres modification.
 async def on_guild_remove(guild):
     async with utils.db_pool.acquire() as conn:
-        await conn.execute( "DELETE FROM roles WHERE guild_id = $1", guild.id)
-        await conn.execute( "DELETE FROM blocked_commands WHERE guild_id = $1", guild.id)
-        await conn.execute( "DELETE FROM command_permissions WHERE guild_id = $1", guild.id)
+        await conn.execute("DELETE FROM bot_permission_rules WHERE guild_id = $1", guild.id)
+        await conn.execute("DELETE FROM bot_permission_audit_log WHERE guild_id = $1", guild.id)
+        await conn.execute("DELETE FROM bot_permission_roles WHERE guild_id = $1", guild.id)
         await conn.execute( "DELETE FROM setup_status WHERE guild_id = $1", str(guild.id))
 
 pending_joins: dict[tuple[int, int], datetime] = {}
@@ -1056,6 +1072,9 @@ async def on_ready():
     if db_pool is None:
         await init_db_pool()
 
+    # Safe to run on reconnects; migrations use IF NOT EXISTS and upserts.
+    await permission_system.initialize_permission_system(utils.db_pool)
+
     #await utils.setup_database()
     #await utils.initialize_database()
     #await utils.setup_permissions()
@@ -1065,6 +1084,9 @@ async def on_ready():
     print(f'Logged in as {bot.user}')
     try:
         synced = await bot.tree.sync()
+        review_required = await permission_system.sync_command_catalog(utils.db_pool, bot)
+        if review_required:
+            print("Permission review required before these commands can be used: " + ", ".join(sorted(review_required)))
         for command in await bot.tree.fetch_commands():
             print(f"Command registered: {command.name}")
         print(f"\nSynced {len(synced)} commands.")
@@ -1177,11 +1199,7 @@ async def setup(interaction: discord.Interaction):
     
     async with utils.db_pool.acquire() as cursor:
 
-        await interaction.followup.send("Assigning owner role...", ephemeral=True)
-        existing_role = await cursor.fetchval("SELECT role FROM roles WHERE guild_id = $1 AND user_id = $2 AND role = $3", guild.id, owner_id, 'owner')
-
-        if not existing_role:
-            await cursor.execute("INSERT INTO roles (guild_id, user_id, role, level) VALUES ($1, $2, $3, $4) ON CONFLICT (guild_id, user_id, role) DO UPDATE SET level = EXCLUDED.level", guild.id, owner_id, 'owner', PERM_LEVELS['owner'])
+        await interaction.followup.send("Slickey owner access follows Discord ownership automatically.", ephemeral=True)
 
         await interaction.followup.send("Registering members...", ephemeral=True)
         for member in guild.members:
@@ -2172,11 +2190,12 @@ async def massban_all(interaction: discord.Interaction, reason: str = "No reason
     global operation_active
     operation_active = True
 
-    # Lucky and Weaver
-    if interaction.user.id not in [1068465457910267975, 1112026631310159892] and not await get_user_level(
-            interaction.guild.id, interaction.user.id) == 5:
+    decision = await permission_system.evaluate(utils.db_pool, guild_id=interaction.guild.id, user_id=interaction.user.id,
+                                                guild_owner_id=interaction.guild.owner_id, command_name="massban",
+                                                channel_id=interaction.channel_id)
+    if not decision.allowed:
         await interaction.response.send_message(
-            "You are not allowed to use the massban command. Only 'owner' role can use this command for security reasons.",
+            f"You cannot use massban here. {decision.reason}.",
             ephemeral=True)
         return
 
@@ -2217,10 +2236,12 @@ async def massban_number(interaction: discord.Interaction, number: int, reason: 
     global operation_active
     operation_active = True
 
-    if interaction.user.id not in [1068465457910267975, 1112026631310159892] and not await get_user_level(
-            interaction.guild.id, interaction.user.id) == 5:
+    decision = await permission_system.evaluate(utils.db_pool, guild_id=interaction.guild.id, user_id=interaction.user.id,
+                                                guild_owner_id=interaction.guild.owner_id, command_name="massban",
+                                                channel_id=interaction.channel_id)
+    if not decision.allowed:
         await interaction.response.send_message(
-            "You are not allowed to use the massban command. Only 'owner' role can use this command for security reasons.",
+            f"You cannot use massban here. {decision.reason}.",
             ephemeral=True)
         return
 
@@ -2298,10 +2319,12 @@ async def massban_role(interaction: discord.Interaction, role: discord.Role, num
     global operation_active
     operation_active = True
 
-    if interaction.user.id not in [1068465457910267975, 1112026631310159892] and not await get_user_level(
-            interaction.guild.id, interaction.user.id) == 5:
+    decision = await permission_system.evaluate(utils.db_pool, guild_id=interaction.guild.id, user_id=interaction.user.id,
+                                                guild_owner_id=interaction.guild.owner_id, command_name="massban",
+                                                channel_id=interaction.channel_id)
+    if not decision.allowed:
         await interaction.response.send_message(
-            "You are not allowed to use the massban command. Only 'owner' role can use this command for security reasons.",
+            f"You cannot use massban here. {decision.reason}.",
             ephemeral=True)
         return
 
@@ -2378,10 +2401,12 @@ async def massban_date(interaction: discord.Interaction, day: int, month: int, y
     global operation_active
     operation_active = True
 
-    if interaction.user.id not in [1068465457910267975, 1112026631310159892] and not await get_user_level(
-            interaction.guild.id, interaction.user.id) == 5:
+    decision = await permission_system.evaluate(utils.db_pool, guild_id=interaction.guild.id, user_id=interaction.user.id,
+                                                guild_owner_id=interaction.guild.owner_id, command_name="massban",
+                                                channel_id=interaction.channel_id)
+    if not decision.allowed:
         await interaction.response.send_message(
-            "You are not allowed to use the massban command. Only 'owner' role can use this command for security reasons.",
+            f"You cannot use massban here. {decision.reason}.",
             ephemeral=True)
         return
 
@@ -2667,10 +2692,12 @@ massunban_group = app_commands.Group(name="massunban", description="Mass Unban C
 
 @massunban_group.command(name="all", description="Unban all banned members.")
 async def massunban_all(interaction: discord.Interaction):
-    if interaction.user.id not in [1068465457910267975, 1112026631310159892] and not await get_user_level(
-            interaction.guild.id, interaction.user.id) == 5:
+    decision = await permission_system.evaluate(utils.db_pool, guild_id=interaction.guild.id, user_id=interaction.user.id,
+                                                guild_owner_id=interaction.guild.owner_id, command_name="massunban",
+                                                channel_id=interaction.channel_id)
+    if not decision.allowed:
         await interaction.response.send_message(
-            "You are not allowed to use the massunban command. Only 'owner' role can use this command for security reasons.",
+            f"You cannot use massunban here. {decision.reason}.",
             ephemeral=True)
         return
     guild = interaction.guild
@@ -8150,6 +8177,7 @@ async def slash_help_command(interaction: discord.Interaction, command_name: str
 async def main():
     async with bot:
         await bot.load_extension("ai_cog")
+        await bot.add_cog(permission_system.PermissionsCog(bot, lambda: utils.db_pool))
         Slickey_Secondary_.setup(bot)
         await bot.start(chota_wigu_bot_token)
 
