@@ -1,24 +1,782 @@
-import React,{useEffect,useMemo,useState}from"react";
-import{createRoot}from"react-dom/client";
-import"./styles.css";
+import React, { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import "./styles.css";
 
-const API=import.meta.env.VITE_DASHBOARD_API||"http://localhost:8000";
-const csrf=()=>document.cookie.split("; ").find(x=>x.startsWith("slickey_csrf="))?.split("=")[1]||"";
-async function api(path,options={}){const method=(options.method||"GET").toUpperCase(),headers={"Content-Type":"application/json",...(options.headers||{})};if(!["GET","HEAD","OPTIONS"].includes(method))headers["X-CSRF-Token"]=csrf();const r=await fetch(`${API}${path}`,{credentials:"include",headers,...options});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||"Something went wrong.");return r.status===204?null:r.json()}
-const Select=({items=[],value,onChange,placeholder="Choose one"})=><select value={value} onChange={e=>onChange(e.target.value)}><option value="">{placeholder}</option>{items.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>;
-const Notice=({error,notice,clear})=><>{error&&<div className="alert error">{error}<button onClick={clear}>x</button></div>}{notice&&<div className="alert notice">{notice}<button onClick={clear}>x</button></div>}</>;
+const API = import.meta.env.VITE_DASHBOARD_API || "http://localhost:8000";
+const csrf = () =>
+  document.cookie
+    .split("; ")
+    .find((x) => x.startsWith("slickey_csrf="))
+    ?.split("=")[1] || "";
+async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase(),
+    headers = {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method))
+    headers["X-CSRF-Token"] = csrf();
+  const r = await fetch(`${API}${path}`, {
+    credentials: "include",
+    headers,
+    ...options,
+  });
+  if (!r.ok)
+    throw new Error(
+      (await r.json().catch(() => ({}))).detail || "Something went wrong.",
+    );
+  return r.status === 204 ? null : r.json();
+}
+const Select = ({
+  items = [],
+  value,
+  onChange,
+  placeholder = "Choose one",
+}) => (
+  <select value={value} onChange={(e) => onChange(e.target.value)}>
+    <option value="">{placeholder}</option>
+    {items.map((x) => (
+      <option key={x.id} value={x.id}>
+        {x.name}
+      </option>
+    ))}
+  </select>
+);
+const Notice = ({ error, notice, clear }) => (
+  <>
+    {error && (
+      <div className="alert error">
+        {error}
+        <button onClick={clear}>x</button>
+      </div>
+    )}
+    {notice && (
+      <div className="alert notice">
+        {notice}
+        <button onClick={clear}>x</button>
+      </div>
+    )}
+  </>
+);
 
-function Login(){const[error,setError]=useState("");const login=async()=>{try{location.assign((await api("/api/auth/login")).url)}catch{setError("The dashboard service is offline. Start the API, then try again.")}};return <main className="login"><div className="mark">S</div><h1>Slickey</h1><p>Clear, powerful permissions for your Discord community.</p>{error&&<div className="alert error">{error}</div>}<button onClick={login}>Continue with Discord</button></main>}
-function App(){const[me,setMe]=useState(null),[guilds,setGuilds]=useState([]),[guild,setGuild]=useState(null),[page,setPage]=useState("overview"),[data,setData]=useState({roles:[],rules:[],members:[],channels:[],audit:[],catalog:[],presets:[]}),[error,setError]=useState(""),[notice,setNotice]=useState("");const fail=e=>setError(e.message||"Something went wrong.");const clear=()=>{setError("");setNotice("")};
- const refresh=async(g=guild)=>{if(!g)return;const[roles,rules,members,channels,audit]=await Promise.all([api(`/api/guilds/${g.id}/roles`),api(`/api/guilds/${g.id}/rules`),api(`/api/guilds/${g.id}/members`),api(`/api/guilds/${g.id}/channels`),api(`/api/guilds/${g.id}/audit`)]);setData(d=>({...d,roles,rules,members,channels,audit}))};
- useEffect(()=>{(async()=>{try{const q=new URLSearchParams(location.search);if(q.has("code")){await api(`/api/auth/callback?${q}`);history.replaceState({},"",location.pathname)}const[me,guilds,catalog,presets]=await Promise.all([api("/api/me"),api("/api/guilds"),api("/api/catalog"),api("/api/presets")]);setMe(me);setGuilds(guilds);setData(d=>({...d,catalog,presets}));if(guilds[0])setGuild(guilds[0])}catch{setMe(false)}})()},[]);useEffect(()=>{refresh().catch(fail)},[guild]);
- if(me===null)return <main className="login">Loading your workspace...</main>;if(me===false)return <Login/>;const mutate=async(fn,message)=>{try{await fn();setNotice(message);refresh()}catch(e){fail(e)}};const groups=data.catalog.reduce((a,x)=>((a[x.category]??=[]).push(x),a),{});
- return <div className="app"><aside><div className="brand"><span className="mark small">S</span><b>Slickey</b></div><div className="identity">Signed in as <b>{me.username}</b></div><Select items={guilds} value={guild?.id||""} onChange={id=>setGuild(guilds.find(x=>x.id===id))} placeholder="Select a server"/><nav>{[["overview","Overview"],["roles","Roles & members"],["policies","Policies"],["catalog","Command catalogue"],["audit","Activity"]].map(([id,label])=><button className={page===id?"nav active":"nav"} onClick={()=>setPage(id)} key={id}>{label}</button>)}</nav><p className="aside-note">Only the owner, Bot Creator, and people granted dashboard access can enter.</p></aside><main><Notice error={error} notice={notice} clear={clear}/>{!guild?<section className="empty"><h1>No accessible servers</h1><p>Ask the server owner to grant your custom role <code>command.dashboard</code>.</p></section>:<><header><div><span className="eyebrow">SERVER WORKSPACE</span><h1>{guild.name}</h1></div><span className="pill">{guild.owner?"Owner access":"Delegated access"}</span></header>{page==="overview"&&<Overview data={data} createPreset={key=>mutate(()=>api(`/api/guilds/${guild.id}/roles/preset`,{method:"POST",body:JSON.stringify({preset:key})}),"Role created. Continue to members to assign it.")} go={setPage}/>} {page==="roles"&&<Roles data={data} guild={guild} mutate={mutate}/>} {page==="policies"&&<Policies data={data} guild={guild} mutate={mutate}/>} {page==="catalog"&&<Catalogue groups={groups}/>} {page==="audit"&&<Audit audit={data.audit}/>}</>}</main></div>}
-function Overview({data,createPreset,go}){const[step,setStep]=useState(0),[chosen,setChosen]=useState("");const preset=data.presets.find(x=>x.key===chosen);return <><section className="hero glass"><div><h2>Permission control, without the maze.</h2><p>Set your team up safely, then make narrow policies only when your server needs them.</p></div><button onClick={()=>go("policies")}>Create a policy</button></section><div className="stats"><div><b>{data.roles.length}</b><span>custom roles</span></div><div><b>{data.rules.length}</b><span>active policies</span></div><div><b>Live</b><span>owner access</span></div></div><section className="glass wizard"><span className="eyebrow">GUIDED SETUP</span><h2>{["Choose a starting role","Confirm the access level","Put it to work"][step]}</h2>{step===0&&<><p className="muted">Presets are editable. Start with the closest fit for your team.</p><div className="preset-grid">{data.presets.map(p=><button className={chosen===p.key?"preset selected":"preset"} onClick={()=>setChosen(p.key)} key={p.key}><b>{p.name}</b><small>{p.description} - rank {p.rank}</small></button>)}</div><button disabled={!chosen} onClick={()=>setStep(1)}>Continue</button></>}{step===1&&<><p>{preset?.name} can be changed after creation. Delegated managers can only create a preset when they already hold each included permission.</p><div className="wizard-actions"><button className="ghost" onClick={()=>setStep(0)}>Back</button><button onClick={()=>{createPreset(chosen);setStep(2)}}>Create {preset?.name}</button></div></>}{step===2&&<><p>Your role is ready. Assign people from the Roles & members page, then use Policies to limit commands to specific channels if needed.</p><div className="wizard-actions"><button onClick={()=>go("roles")}>Assign members</button><button className="ghost" onClick={()=>go("policies")}>Create a policy</button></div></>}</section></>}
-function Roles({data,guild,mutate}){const[detail,setDetail]=useState(null),[member,setMember]=useState("");const open=async id=>setDetail(await api(`/api/guilds/${guild.id}/roles/${id}`));const role=detail?.role;return <section className="split"><div><h2>Roles</h2><p className="muted">Roles group people. Policies decide what they can do.</p><div className="list">{data.roles.map(r=><button className="row" onClick={()=>open(r.id)} key={r.id}><span><b>{r.name}</b><small>{r.description||"No description"}</small></span><span>{r.member_count} members - rank {r.rank}</span></button>)}{!data.roles.length&&<p className="empty-inline">No roles yet. Start with guided setup.</p>}</div></div><RoleCreate guild={guild} mutate={mutate}/>{role&&<section className="drawer glass"><button className="close" onClick={()=>setDetail(null)}>x</button><h2>{role.name}</h2><form className="form compact" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);mutate(()=>api(`/api/guilds/${guild.id}/roles/${role.id}`,{method:"PUT",body:JSON.stringify({name:f.get("name"),description:f.get("description"),rank:Number(f.get("rank"))})}),"Role updated.").then(()=>open(role.id))}}><input name="name" defaultValue={role.name}/><input name="description" defaultValue={role.description}/><input name="rank" type="number" defaultValue={role.rank}/><button>Save role</button></form><h3>Members</h3><div className="assign"><Select items={data.members} value={member} onChange={setMember} placeholder="Choose a member"/><button disabled={!member} onClick={()=>mutate(()=>api(`/api/guilds/${guild.id}/roles/${role.id}/members`,{method:"POST",body:JSON.stringify({user_id:Number(member)})}),"Member assigned.").then(()=>open(role.id))}>Assign</button></div><div className="chips">{detail.members.map(m=>{const p=data.members.find(x=>x.id===String(m.user_id));return <span key={m.user_id}>{p?.name||m.user_id}<button onClick={()=>mutate(()=>api(`/api/guilds/${guild.id}/roles/${role.id}/members/${m.user_id}`,{method:"DELETE"}),"Member removed.").then(()=>open(role.id))}>x</button></span>})}{!detail.members.length&&<small>No members assigned.</small>}</div><h3>Role policies</h3>{detail.rules.map(r=><p key={r.id}><b className={r.effect}>{r.effect}</b> <code>{r.permission_key}</code> in {r.scope_type}</p>)}<button className="danger" onClick={()=>mutate(()=>api(`/api/guilds/${guild.id}/roles/${role.id}`,{method:"DELETE"}),"Role deleted.").then(()=>setDetail(null))}>Delete role</button></section>}</section>}
-function RoleCreate({guild,mutate}){return <form className="glass form" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);mutate(()=>api(`/api/guilds/${guild.id}/roles`,{method:"POST",body:JSON.stringify({name:f.get("name"),description:f.get("description"),rank:Number(f.get("rank")||0)})}),"Role created.");e.currentTarget.reset()}}><h3>Create a role</h3><input name="name" required placeholder="Event Manager"/><input name="description" placeholder="What this role is for"/><input name="rank" type="number" placeholder="Rank"/><button>Create role</button></form>}
-function Policies({data,guild,mutate}){const[subject,setSubject]=useState("role"),[scope,setScope]=useState("guild"),[why,setWhy]=useState({user:"",command:"",channel:""}),[result,setResult]=useState(null);const submit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await mutate(()=>api(`/api/guilds/${guild.id}/rules`,{method:"POST",body:JSON.stringify({subject_type:subject,subject_id:subject==="member"?null:Number(f.get("subject")),permission_key:f.get("key"),effect:f.get("effect"),scope_type:scope,scope_id:scope==="guild"?null:Number(f.get("scope")),confirm_broad_deny:f.get("confirm")==="on"})}),"Policy saved.")};return <><section className="split"><form className="glass form" onSubmit={submit}><h2>Create policy</h2><select value={subject} onChange={e=>setSubject(e.target.value)}><option value="role">A custom role</option><option value="user">A specific member</option><option value="member">Everyone</option></select>{subject!=="member"&&<select name="subject" required><option value="">Choose target</option>{(subject==="role"?data.roles:data.members).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}<select name="key" required><option value="">Choose command or category</option>{data.catalog.map(x=><option key={x.command_path} value={x.permission_key}>{x.display_name} - {x.category}</option>)}<option value="command.*">All commands</option></select><select name="effect"><option value="allow">Allow</option><option value="deny">Deny</option></select><select value={scope} onChange={e=>setScope(e.target.value)}><option value="guild">Entire server</option><option value="category">One category</option><option value="channel">One channel</option></select>{scope!=="guild"&&<select name="scope" required><option value="">Choose scope</option>{data.channels.filter(x=>scope==="category"?x.type===4:x.type===0).map(x=><option key={x.id} value={x.id}>{scope==="category"?"Category: ":"#"}{x.name}</option>)}</select>}<label className="check"><input name="confirm" type="checkbox"/> Confirm broad deny</label><button>Save policy</button></form><WhyPanel data={data} why={why} setWhy={setWhy} result={result} setResult={setResult} guild={guild}/></section><section><h2>Active policies</h2><div className="list">{data.rules.map(r=><div className="row static" key={r.id}><span><b className={r.effect}>{r.effect}</b> <code>{r.permission_key}</code><small>{r.subject_type} - {r.scope_type}</small></span><button className="danger" onClick={()=>mutate(()=>api(`/api/guilds/${guild.id}/rules/${r.id}`,{method:"DELETE"}),"Policy removed.")}>Remove</button></div>)}</div></section></>}
-function WhyPanel({data,why,setWhy,result,setResult,guild}){const explain=async()=>setResult(await api(`/api/guilds/${guild.id}/explain`,{method:"POST",body:JSON.stringify({user_id:Number(why.user),command_name:why.command,channel_id:why.channel?Number(why.channel):null})}));return <section className="glass explain"><h2>Why?</h2><p className="muted">Preview the exact decision and the rules that were considered.</p><Select items={data.members} value={why.user} onChange={user=>setWhy({...why,user})} placeholder="Select member"/><select value={why.command} onChange={e=>setWhy({...why,command:e.target.value})}><option value="">Select command</option>{data.catalog.map(x=><option key={x.command_path} value={x.permission_key.replace("command.","")}>{x.display_name}</option>)}</select><Select items={data.channels.filter(x=>x.type===0).map(x=>({...x,name:`#${x.name}`}))} value={why.channel} onChange={channel=>setWhy({...why,channel})} placeholder="Any channel"/><button disabled={!why.user||!why.command} onClick={explain}>Explain access</button>{result&&<div className={result.allowed?"decision allow":"decision deny"}><b>{result.allowed?"Allowed":"Denied"}</b><span>{result.reason}</span><ol>{result.trace.map((x,i)=><li className={x.selected?"selected":""} key={i}>{x.kind==="rule"?<>{x.selected?"Used":"Considered"}: <code>{x.effect} {x.permission_key}</code> for {x.subject_type} in {x.scope_type}</>:x.label}{x.outcome&&` ${x.outcome}`}</li>)}</ol></div>}</section>}
-function Catalogue({groups}){return <><h2>Command catalogue</h2><p className="muted">Protected commands need an allow policy. Public commands are available until restricted.</p>{Object.entries(groups).map(([category,items])=><section className="catalogue" key={category}><h3>{category}</h3>{items.map(x=><article className="catalog-row" key={x.command_path}><span><b>{x.display_name}</b><small>{x.command_path} - {x.description||"No description supplied"}</small></span><span className={x.default_access==="public"?"badge public":"badge protected"}>{x.default_access}</span></article>)}</section>)}</>}
-function Audit({audit}){return <><h2>Activity</h2><p className="muted">Recent permission changes in this server.</p><div className="list">{audit.map(x=><div className="row static" key={x.id}><span><b>{x.action}</b><small>by {x.actor_id} - {new Date(x.created_at).toLocaleString()}</small></span></div>)}{!audit.length&&<p className="empty-inline">No permission activity has been recorded yet.</p>}</div></>}
-createRoot(document.getElementById("root")).render(<App/>);
+function Login() {
+  const [error, setError] = useState("");
+  const login = async () => {
+    try {
+      location.assign((await api("/api/auth/login")).url);
+    } catch {
+      setError(
+        "The dashboard service is offline. Start the API, then try again.",
+      );
+    }
+  };
+  return (
+    <main className="login">
+      <div className="mark">S</div>
+      <h1>Slickey</h1>
+      <p>Clear, powerful permissions for your Discord community.</p>
+      {error && <div className="alert error">{error}</div>}
+      <button onClick={login}>Continue with Discord</button>
+    </main>
+  );
+}
+function App() {
+  const [me, setMe] = useState(null),
+    [guilds, setGuilds] = useState([]),
+    [guild, setGuild] = useState(null),
+    [page, setPage] = useState("overview"),
+    [data, setData] = useState({
+      roles: [],
+      rules: [],
+      members: [],
+      channels: [],
+      audit: [],
+      catalog: [],
+      presets: [],
+    }),
+    [error, setError] = useState(""),
+    [notice, setNotice] = useState("");
+  const fail = (e) => setError(e.message || "Something went wrong.");
+  const clear = () => {
+    setError("");
+    setNotice("");
+  };
+  const refresh = async (g = guild) => {
+    if (!g) return;
+    const [roles, rules, members, channels, audit] = await Promise.all([
+      api(`/api/guilds/${g.id}/roles`),
+      api(`/api/guilds/${g.id}/rules`),
+      api(`/api/guilds/${g.id}/members`),
+      api(`/api/guilds/${g.id}/channels`),
+      api(`/api/guilds/${g.id}/audit`),
+    ]);
+    setData((d) => ({ ...d, roles, rules, members, channels, audit }));
+  };
+  useEffect(() => {
+    (async () => {
+      try {
+        const q = new URLSearchParams(location.search);
+        if (q.has("code")) {
+          await api(`/api/auth/callback?${q}`);
+          history.replaceState({}, "", location.pathname);
+        }
+        const [me, guilds, catalog, presets] = await Promise.all([
+          api("/api/me"),
+          api("/api/guilds"),
+          api("/api/catalog"),
+          api("/api/presets"),
+        ]);
+        setMe(me);
+        setGuilds(guilds);
+        setData((d) => ({ ...d, catalog, presets }));
+        if (guilds[0]) setGuild(guilds[0]);
+      } catch {
+        setMe(false);
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    refresh().catch(fail);
+  }, [guild]);
+  if (me === null)
+    return <main className="login">Loading your workspace...</main>;
+  if (me === false) return <Login />;
+  const mutate = async (fn, message) => {
+    try {
+      await fn();
+      setNotice(message);
+      refresh();
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const groups = data.catalog.reduce(
+    (a, x) => ((a[x.category] ??= []).push(x), a),
+    {},
+  );
+  return (
+    <div className="app">
+      <aside>
+        <div className="brand">
+          <span className="mark small">S</span>
+          <b>Slickey</b>
+        </div>
+        <div className="identity">
+          Signed in as <b>{me.username}</b>
+        </div>
+        <Select
+          items={guilds}
+          value={guild?.id || ""}
+          onChange={(id) => setGuild(guilds.find((x) => x.id === id))}
+          placeholder="Select a server"
+        />
+        <nav>
+          {[
+            ["overview", "Overview"],
+            ["roles", "Roles & members"],
+            ["policies", "Policies"],
+            ["catalog", "Command catalogue"],
+            ["audit", "Activity"],
+          ].map(([id, label]) => (
+            <button
+              className={page === id ? "nav active" : "nav"}
+              onClick={() => setPage(id)}
+              key={id}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        <p className="aside-note">
+          Only the owner, Bot Creator, and people granted dashboard access can
+          enter.
+        </p>
+      </aside>
+      <main>
+        <Notice error={error} notice={notice} clear={clear} />
+        {!guild ? (
+          <section className="empty">
+            <h1>No accessible servers</h1>
+            <p>
+              Ask the server owner to grant your custom role{" "}
+              <code>command.dashboard</code>.
+            </p>
+          </section>
+        ) : (
+          <>
+            <header>
+              <div>
+                <span className="eyebrow">SERVER WORKSPACE</span>
+                <h1>{guild.name}</h1>
+              </div>
+              <span className="pill">
+                {guild.owner ? "Owner access" : "Delegated access"}
+              </span>
+            </header>
+            {page === "overview" && (
+              <Overview
+                data={data}
+                createPreset={(key) =>
+                  mutate(
+                    () =>
+                      api(`/api/guilds/${guild.id}/roles/preset`, {
+                        method: "POST",
+                        body: JSON.stringify({ preset: key }),
+                      }),
+                    "Role created. Continue to members to assign it.",
+                  )
+                }
+                go={setPage}
+              />
+            )}{" "}
+            {page === "roles" && (
+              <Roles data={data} guild={guild} mutate={mutate} />
+            )}{" "}
+            {page === "policies" && (
+              <Policies data={data} guild={guild} mutate={mutate} />
+            )}{" "}
+            {page === "catalog" && <Catalogue groups={groups} />}{" "}
+            {page === "audit" && <Audit audit={data.audit} />}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+function Overview({ data, createPreset, go }) {
+  const [step, setStep] = useState(0),
+    [chosen, setChosen] = useState("");
+  const preset = data.presets.find((x) => x.key === chosen);
+  return (
+    <>
+      <section className="hero glass">
+        <div>
+          <h2>Permission control, without the maze.</h2>
+          <p>
+            Set your team up safely, then make narrow policies only when your
+            server needs them.
+          </p>
+        </div>
+        <button onClick={() => go("policies")}>Create a policy</button>
+      </section>
+      <div className="stats">
+        <div>
+          <b>{data.roles.length}</b>
+          <span>custom roles</span>
+        </div>
+        <div>
+          <b>{data.rules.length}</b>
+          <span>active policies</span>
+        </div>
+        <div>
+          <b>Live</b>
+          <span>owner access</span>
+        </div>
+      </div>
+      <section className="glass wizard">
+        <span className="eyebrow">GUIDED SETUP</span>
+        <h2>
+          {
+            [
+              "Choose a starting role",
+              "Confirm the access level",
+              "Put it to work",
+            ][step]
+          }
+        </h2>
+        {step === 0 && (
+          <>
+            <p className="muted">
+              Presets are editable. Start with the closest fit for your team.
+            </p>
+            <div className="preset-grid">
+              {data.presets.map((p) => (
+                <button
+                  className={chosen === p.key ? "preset selected" : "preset"}
+                  onClick={() => setChosen(p.key)}
+                  key={p.key}
+                >
+                  <b>{p.name}</b>
+                  <small>
+                    {p.description} - rank {p.rank}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <button disabled={!chosen} onClick={() => setStep(1)}>
+              Continue
+            </button>
+          </>
+        )}
+        {step === 1 && (
+          <>
+            <p>
+              {preset?.name} can be changed after creation. Delegated managers
+              can only create a preset when they already hold each included
+              permission.
+            </p>
+            <div className="wizard-actions">
+              <button className="ghost" onClick={() => setStep(0)}>
+                Back
+              </button>
+              <button
+                onClick={() => {
+                  createPreset(chosen);
+                  setStep(2);
+                }}
+              >
+                Create {preset?.name}
+              </button>
+            </div>
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <p>
+              Your role is ready. Assign people from the Roles & members page,
+              then use Policies to limit commands to specific channels if
+              needed.
+            </p>
+            <div className="wizard-actions">
+              <button onClick={() => go("roles")}>Assign members</button>
+              <button className="ghost" onClick={() => go("policies")}>
+                Create a policy
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+function Roles({ data, guild, mutate }) {
+  const [detail, setDetail] = useState(null),
+    [member, setMember] = useState("");
+  const open = async (id) =>
+    setDetail(await api(`/api/guilds/${guild.id}/roles/${id}`));
+  const role = detail?.role;
+  return (
+    <section className="split">
+      <div>
+        <h2>Roles</h2>
+        <p className="muted">
+          Roles group people. Policies decide what they can do.
+        </p>
+        <div className="list">
+          {data.roles.map((r) => (
+            <button className="row" onClick={() => open(r.id)} key={r.id}>
+              <span>
+                <b>{r.name}</b>
+                <small>{r.description || "No description"}</small>
+              </span>
+              <span>
+                {r.member_count} members - rank {r.rank}
+              </span>
+            </button>
+          ))}
+          {!data.roles.length && (
+            <p className="empty-inline">
+              No roles yet. Start with guided setup.
+            </p>
+          )}
+        </div>
+      </div>
+      <RoleCreate guild={guild} mutate={mutate} />
+      {role && (
+        <section className="drawer glass">
+          <button className="close" onClick={() => setDetail(null)}>
+            x
+          </button>
+          <h2>{role.name}</h2>
+          <form
+            className="form compact"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = new FormData(e.currentTarget);
+              mutate(
+                () =>
+                  api(`/api/guilds/${guild.id}/roles/${role.id}`, {
+                    method: "PUT",
+                    body: JSON.stringify({
+                      name: f.get("name"),
+                      description: f.get("description"),
+                      rank: Number(f.get("rank")),
+                    }),
+                  }),
+                "Role updated.",
+              ).then(() => open(role.id));
+            }}
+          >
+            <input name="name" defaultValue={role.name} />
+            <input name="description" defaultValue={role.description} />
+            <input name="rank" type="number" defaultValue={role.rank} />
+            <button>Save role</button>
+          </form>
+          <h3>Members</h3>
+          <div className="assign">
+            <Select
+              items={data.members}
+              value={member}
+              onChange={setMember}
+              placeholder="Choose a member"
+            />
+            <button
+              disabled={!member}
+              onClick={() =>
+                mutate(
+                  () =>
+                    api(`/api/guilds/${guild.id}/roles/${role.id}/members`, {
+                      method: "POST",
+                      body: JSON.stringify({ user_id: Number(member) }),
+                    }),
+                  "Member assigned.",
+                ).then(() => open(role.id))
+              }
+            >
+              Assign
+            </button>
+          </div>
+          <div className="chips">
+            {detail.members.map((m) => {
+              const p = data.members.find((x) => x.id === String(m.user_id));
+              return (
+                <span key={m.user_id}>
+                  {p?.name || m.user_id}
+                  <button
+                    onClick={() =>
+                      mutate(
+                        () =>
+                          api(
+                            `/api/guilds/${guild.id}/roles/${role.id}/members/${m.user_id}`,
+                            { method: "DELETE" },
+                          ),
+                        "Member removed.",
+                      ).then(() => open(role.id))
+                    }
+                  >
+                    x
+                  </button>
+                </span>
+              );
+            })}
+            {!detail.members.length && <small>No members assigned.</small>}
+          </div>
+          <h3>Role policies</h3>
+          {detail.rules.map((r) => (
+            <p key={r.id}>
+              <b className={r.effect}>{r.effect}</b>{" "}
+              <code>{r.permission_key}</code> in {r.scope_type}
+            </p>
+          ))}
+          <button
+            className="danger"
+            onClick={() =>
+              mutate(
+                () =>
+                  api(`/api/guilds/${guild.id}/roles/${role.id}`, {
+                    method: "DELETE",
+                  }),
+                "Role deleted.",
+              ).then(() => setDetail(null))
+            }
+          >
+            Delete role
+          </button>
+        </section>
+      )}
+    </section>
+  );
+}
+function RoleCreate({ guild, mutate }) {
+  return (
+    <form
+      className="glass form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const f = new FormData(e.currentTarget);
+        mutate(
+          () =>
+            api(`/api/guilds/${guild.id}/roles`, {
+              method: "POST",
+              body: JSON.stringify({
+                name: f.get("name"),
+                description: f.get("description"),
+                rank: Number(f.get("rank") || 0),
+              }),
+            }),
+          "Role created.",
+        );
+        e.currentTarget.reset();
+      }}
+    >
+      <h3>Create a role</h3>
+      <input name="name" required placeholder="Event Manager" />
+      <input name="description" placeholder="What this role is for" />
+      <input name="rank" type="number" placeholder="Rank" />
+      <button>Create role</button>
+    </form>
+  );
+}
+function Policies({ data, guild, mutate }) {
+  const [subject, setSubject] = useState("role"),
+    [scope, setScope] = useState("guild"),
+    [why, setWhy] = useState({ user: "", command: "", channel: "" }),
+    [result, setResult] = useState(null);
+  const submit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    await mutate(
+      () =>
+        api(`/api/guilds/${guild.id}/rules`, {
+          method: "POST",
+          body: JSON.stringify({
+            subject_type: subject,
+            subject_id: subject === "member" ? null : Number(f.get("subject")),
+            permission_key: f.get("key"),
+            effect: f.get("effect"),
+            scope_type: scope,
+            scope_id: scope === "guild" ? null : Number(f.get("scope")),
+            confirm_broad_deny: f.get("confirm") === "on",
+          }),
+        }),
+      "Policy saved.",
+    );
+  };
+  return (
+    <>
+      <section className="split">
+        <form className="glass form" onSubmit={submit}>
+          <h2>Create policy</h2>
+          <select value={subject} onChange={(e) => setSubject(e.target.value)}>
+            <option value="role">A custom role</option>
+            <option value="user">A specific member</option>
+            <option value="member">Everyone</option>
+          </select>
+          {subject !== "member" && (
+            <select name="subject" required>
+              <option value="">Choose target</option>
+              {(subject === "role" ? data.roles : data.members).map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <select name="key" required>
+            <option value="">Choose command or category</option>
+            {data.catalog.map((x) => (
+              <option key={x.command_path} value={x.permission_key}>
+                {x.display_name} - {x.category}
+              </option>
+            ))}
+            <option value="command.*">All commands</option>
+          </select>
+          <select name="effect">
+            <option value="allow">Allow</option>
+            <option value="deny">Deny</option>
+          </select>
+          <select value={scope} onChange={(e) => setScope(e.target.value)}>
+            <option value="guild">Entire server</option>
+            <option value="category">One category</option>
+            <option value="channel">One channel</option>
+          </select>
+          {scope !== "guild" && (
+            <select name="scope" required>
+              <option value="">Choose scope</option>
+              {data.channels
+                .filter((x) =>
+                  scope === "category" ? x.type === 4 : x.type === 0,
+                )
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {scope === "category" ? "Category: " : "#"}
+                    {x.name}
+                  </option>
+                ))}
+            </select>
+          )}
+          <label className="check">
+            <input name="confirm" type="checkbox" /> Confirm broad deny
+          </label>
+          <button>Save policy</button>
+        </form>
+        <WhyPanel
+          data={data}
+          why={why}
+          setWhy={setWhy}
+          result={result}
+          setResult={setResult}
+          guild={guild}
+        />
+      </section>
+      <section>
+        <h2>Active policies</h2>
+        <div className="list">
+          {data.rules.map((r) => (
+            <div className="row static" key={r.id}>
+              <span>
+                <b className={r.effect}>{r.effect}</b>{" "}
+                <code>{r.permission_key}</code>
+                <small>
+                  {r.subject_type} - {r.scope_type}
+                </small>
+              </span>
+              <button
+                className="danger"
+                onClick={() =>
+                  mutate(
+                    () =>
+                      api(`/api/guilds/${guild.id}/rules/${r.id}`, {
+                        method: "DELETE",
+                      }),
+                    "Policy removed.",
+                  )
+                }
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+function WhyPanel({ data, why, setWhy, result, setResult, guild }) {
+  const explain = async () =>
+    setResult(
+      await api(`/api/guilds/${guild.id}/explain`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: Number(why.user),
+          command_name: why.command,
+          channel_id: why.channel ? Number(why.channel) : null,
+        }),
+      }),
+    );
+  return (
+    <section className="glass explain">
+      <h2>Why?</h2>
+      <p className="muted">
+        Preview the exact decision and the rules that were considered.
+      </p>
+      <Select
+        items={data.members}
+        value={why.user}
+        onChange={(user) => setWhy({ ...why, user })}
+        placeholder="Select member"
+      />
+      <select
+        value={why.command}
+        onChange={(e) => setWhy({ ...why, command: e.target.value })}
+      >
+        <option value="">Select command</option>
+        {data.catalog.map((x) => (
+          <option
+            key={x.command_path}
+            value={x.permission_key.replace("command.", "")}
+          >
+            {x.display_name}
+          </option>
+        ))}
+      </select>
+      <Select
+        items={data.channels
+          .filter((x) => x.type === 0)
+          .map((x) => ({ ...x, name: `#${x.name}` }))}
+        value={why.channel}
+        onChange={(channel) => setWhy({ ...why, channel })}
+        placeholder="Any channel"
+      />
+      <button disabled={!why.user || !why.command} onClick={explain}>
+        Explain access
+      </button>
+      {result && (
+        <div className={result.allowed ? "decision allow" : "decision deny"}>
+          <b>{result.allowed ? "Allowed" : "Denied"}</b>
+          <span>{result.reason}</span>
+          <ol>
+            {result.trace.map((x, i) => (
+              <li className={x.selected ? "selected" : ""} key={i}>
+                {x.kind === "rule" ? (
+                  <>
+                    {x.selected ? "Used" : "Considered"}:{" "}
+                    <code>
+                      {x.effect} {x.permission_key}
+                    </code>{" "}
+                    for {x.subject_type} in {x.scope_type}
+                  </>
+                ) : (
+                  x.label
+                )}
+                {x.outcome && ` ${x.outcome}`}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
+}
+function Catalogue({ groups }) {
+  return (
+    <>
+      <h2>Command catalogue</h2>
+      <p className="muted">
+        Protected commands need an allow policy. Public commands are available
+        until restricted.
+      </p>
+      {Object.entries(groups).map(([category, items]) => (
+        <section className="catalogue" key={category}>
+          <h3>{category}</h3>
+          {items.map((x) => (
+            <article className="catalog-row" key={x.command_path}>
+              <span>
+                <b>{x.display_name}</b>
+                <small>
+                  {x.command_path} -{" "}
+                  {x.description || "No description supplied"}
+                </small>
+              </span>
+              <span
+                className={
+                  x.default_access === "public"
+                    ? "badge public"
+                    : "badge protected"
+                }
+              >
+                {x.default_access}
+              </span>
+            </article>
+          ))}
+        </section>
+      ))}
+    </>
+  );
+}
+function Audit({ audit }) {
+  return (
+    <>
+      <h2>Activity</h2>
+      <p className="muted">Recent permission changes in this server.</p>
+      <div className="list">
+        {audit.map((x) => (
+          <div className="row static" key={x.id}>
+            <span>
+              <b>{x.action}</b>
+              <small>
+                by {x.actor_id} - {new Date(x.created_at).toLocaleString()}
+              </small>
+            </span>
+          </div>
+        ))}
+        {!audit.length && (
+          <p className="empty-inline">
+            No permission activity has been recorded yet.
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+createRoot(document.getElementById("root")).render(<App />);
