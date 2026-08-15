@@ -727,9 +727,8 @@ async def on_close():
 
 @bot.tree.command(name="setup", description="Initialize the bot in this server (Admin/Owner only)")
 async def setup(interaction: discord.Interaction):
-    if not (interaction.user.guild_permissions.administrator or interaction.user.id == interaction.guild.owner_id):
-        await interaction.response.send_message("You don't have permission to run this command.", ephemeral=True)
-        return
+    # The global Slickey policy gate controls user access.  Discord's native
+    # Administrator flag is intentionally not an authorization requirement.
 
     guild = interaction.guild
     global operation_active
@@ -1192,13 +1191,7 @@ async def slash_bn(interaction: discord.Interaction, members: str = None):
 @bot.command(name='setprefix', help=f'Change the prefix of this bot.\n**Syntax**: setprefix new_prefix or type "delete" for deleting the set-prefix')
 @commands.guild_only()
 async def set_prefix(ctx, new_prefix: str):
-    if not await only_for_setprefix(ctx.guild.id, ctx.author.id):
-        await ctx.reply("You are not allowed to use this command. Only admin and above level users can use this command.")
-        return
-
-    if await is_command_blocked(ctx.guild.id, ctx.author.id, "setprefix"):
-        await ctx.reply("You are blocked from using setprefix.")
-        return
+    # The global Slickey policy gate has already authorised this command.
 
     async with utils.db_pool.acquire() as exec:
         if new_prefix.lower() == "delete" or new_prefix.lower() == "del":
@@ -3614,7 +3607,6 @@ async def purge_error(ctx, error):
     app_commands.Choice(name="Human messages only", value="users"),
 ])
 @app_commands.guild_only()
-@app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.checks.bot_has_permissions(manage_messages=True, read_message_history=True)
 async def purge_slash(
     interaction: discord.Interaction,
@@ -3642,9 +3634,7 @@ async def purge_slash(
 
 @purge_slash.error
 async def purge_slash_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("You need `Manage Messages` permission to use this.", ephemeral=True)
-    elif isinstance(error, app_commands.BotMissingPermissions):
+    if isinstance(error, app_commands.BotMissingPermissions):
         await interaction.response.send_message("I need `Manage Messages` permission to do that.", ephemeral=True)
     else:
         await interaction.response.send_message(f"An unexpected error occurred: {error}", ephemeral=True)

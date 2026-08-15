@@ -1,11 +1,12 @@
 import asyncio
 import ast
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from permission_system import (BOT_CREATOR_ID, COMMAND_REGISTRY, PUBLIC_ACTION_COMMANDS, ROLE_PRESETS,
                                canonical_command_name, command_keys, default_allowed,
-                               evaluate, is_broad_deny)
+                               actor_can_delegate_permission, evaluate, evaluate_permission, is_broad_deny)
 
 
 class _Acquire:
@@ -66,6 +67,15 @@ class PermissionSystemTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_keys("role_roulette")[0], "command.roleroulette")
         self.assertEqual(canonical_command_name("/massban all"), "massban")
 
+    def test_legacy_handler_guards_do_not_contradict_custom_policies(self):
+        """High-risk handlers must use their registered policy identifiers."""
+        root = Path(__file__).resolve().parents[1]
+        main = (root / "Slickey_Main_.py").read_text(encoding="utf-8")
+        secondary = (root / "Slickey_Secondary_.py").read_text(encoding="utf-8")
+        self.assertNotIn("@app_commands.checks.has_permissions(manage_messages=True)", main)
+        self.assertNotIn('"toggle_spawn")', secondary)
+        self.assertIn('"spawn")', secondary)
+
     async def test_creator_and_owner_bypass(self):
         creator = await evaluate(None, guild_id=1, user_id=BOT_CREATOR_ID, guild_owner_id=None, command_name="ban")
         owner = await evaluate(None, guild_id=1, user_id=2, guild_owner_id=2, command_name="ban")
@@ -102,6 +112,47 @@ class PermissionSystemTests(unittest.IsolatedAsyncioTestCase):
         decision = await evaluate(FakePool(rules=rules), guild_id=1, user_id=7, guild_owner_id=None, command_name="ban", channel_id=42)
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.matched_rule_id, 2)
+
+    async def test_priority_breaks_an_otherwise_equal_rule_tie(self):
+        rules = [
+            {"id": 1, "subject_type": "user", "subject_id": 7, "permission_key": "command.ban", "scope_type": "guild", "scope_id": None, "effect": "deny", "priority": 0},
+            {"id": 2, "subject_type": "user", "subject_id": 7, "permission_key": "command.ban", "scope_type": "guild", "scope_id": None, "effect": "allow", "priority": 10},
+        ]
+        decision = await evaluate(FakePool(rules=rules), guild_id=1, user_id=7, guild_owner_id=None, command_name="ban")
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.matched_rule_id, 2)
+
+    async def test_expired_rule_no_longer_affects_a_decision(self):
+        rules = [
+            {"id": 1, "subject_type": "user", "subject_id": 7, "permission_key": "command.ban", "scope_type": "guild", "scope_id": None, "effect": "allow", "expires_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+        ]
+        decision = await evaluate(FakePool(rules=rules), guild_id=1, user_id=7, guild_owner_id=None, command_name="ban")
+        self.assertFalse(decision.allowed)
+
+    async def test_policy_capability_uses_the_same_role_and_scope_rules(self):
+        rules = [
+            {"id": 1, "subject_type": "role", "subject_id": 9, "permission_key": "policy.rule.read", "scope_type": "category", "scope_id": 12, "effect": "allow"},
+        ]
+        decision = await evaluate_permission(
+            FakePool(roles=(9,), rules=rules), guild_id=1, user_id=7, guild_owner_id=None,
+            permission_key="policy.rule.read", channel_id=100, category_id=12,
+        )
+        self.assertTrue(decision.allowed)
+
+    async def test_delegation_cannot_expand_a_channel_grant_to_the_server(self):
+        rules = [
+            {"id": 1, "subject_type": "role", "subject_id": 9, "permission_key": "policy.rule.create", "scope_type": "channel", "scope_id": 100, "effect": "allow"},
+            {"id": 2, "subject_type": "role", "subject_id": 9, "permission_key": "command.ban", "scope_type": "channel", "scope_id": 100, "effect": "allow"},
+        ]
+        pool = FakePool(roles=(9,), rules=rules)
+        self.assertTrue(await actor_can_delegate_permission(
+            pool, guild_id=1, user_id=7, guild_owner_id=None, permission_key="command.ban",
+            scope_type="channel", scope_id=100,
+        ))
+        self.assertFalse(await actor_can_delegate_permission(
+            pool, guild_id=1, user_id=7, guild_owner_id=None, permission_key="command.ban",
+            scope_type="guild",
+        ))
 
     async def test_unclassified_command_fails_closed_when_strict_mode_is_enabled(self):
         decision = await evaluate(

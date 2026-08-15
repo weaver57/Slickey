@@ -293,7 +293,8 @@ async def run_query(ctx):
 @app_commands.command(name="spawn", description="Turn spawn ON/OFF for this server")
 @app_commands.choices(action=[app_commands.Choice(name="Enable", value="enable"), app_commands.Choice(name="Disable", value="disable")])
 async def toggle_spawn(interaction: discord.Interaction, action: app_commands.Choice[str]):
-    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "toggle_spawn"):
+    # This must match the registered command name and its policy key.
+    if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "spawn"):
         return
     
     guild_id = str(interaction.guild.id)
