@@ -97,7 +97,7 @@ async def csrf_protection(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/api/health")
+@app.get("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
     """Small readiness endpoint used by local startup checks and deployments."""
     await request.app.state.pool.fetchval("SELECT 1")
@@ -330,7 +330,7 @@ def _clean_role_name(name: str) -> str:
 async def login(response: Response):
     _require_configuration()
     state = secrets.token_urlsafe(32)
-    response.set_cookie("slickey_oauth_state", state, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=600, path="/api/auth")
+    response.set_cookie("slickey_oauth_state", state, httponly=True, secure=COOKIE_SECURE, samesite="none", max_age=600, path="/api/auth")
     url = "https://discord.com/oauth2/authorize?" + urlencode({
         "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "response_type": "code", "scope": "identify guilds", "state": state,
     })
@@ -362,8 +362,8 @@ async def callback(request: Request, response: Response, code: str, state: str, 
            VALUES ($1, $2, $3, $4::jsonb, NOW() + INTERVAL '8 hours')""",
         _hash_session(session_id), int(user["id"]), user["username"], json.dumps(guilds),
     )
-    response.set_cookie("slickey_session", session_id, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
-    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
+    response.set_cookie("slickey_session", session_id, httponly=True, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
+    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
     response.delete_cookie("slickey_oauth_state", path="/api/auth")
     return {"ok": True, "redirect": FRONTEND_ORIGIN}
 
@@ -393,8 +393,8 @@ async def refresh_session(request: Request, response: Response, slickey_session:
         "UPDATE dashboard_sessions SET token=$1, expires_at=NOW() + INTERVAL '8 hours' WHERE token=$2",
         _hash_session(new_token), _hash_session(slickey_session),
     )
-    response.set_cookie("slickey_session", new_token, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
-    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
+    response.set_cookie("slickey_session", new_token, httponly=True, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
+    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
     return {"ok": True, "username": session.user["username"]}
 
 
