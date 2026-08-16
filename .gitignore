@@ -1,3 +1,5 @@
 # Environment variables
 .env
 .env.*
+./dashboard/node_modules/
+./dashboard/dist/
