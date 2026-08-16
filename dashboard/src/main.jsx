@@ -251,6 +251,7 @@ function App() {
       channels: [],
       audit: [],
       catalog: [],
+      permissions: [],
       presets: [],
     }),
     [error, setError] = useState(""),
@@ -297,15 +298,16 @@ function App() {
           await api(`/api/auth/callback?${q}`);
           history.replaceState({}, "", location.pathname);
         }
-        const [me, guilds, catalog, presets] = await Promise.all([
+        const [me, guilds, catalog, permissions, presets] = await Promise.all([
           api("/api/me"),
           api("/api/guilds"),
           api("/api/catalog"),
+          api("/api/permissions"),
           api("/api/presets"),
         ]);
         setMe(me);
         setGuilds(guilds);
-        setData((d) => ({ ...d, catalog, presets }));
+        setData((d) => ({ ...d, catalog, permissions, presets }));
         if (guilds[0]) setGuild(guilds[0]);
       } catch {
         setMe(false);
@@ -652,7 +654,7 @@ function Roles({ data, guild, mutate, searchMembers }) {
                   () =>
                     api(`/api/guilds/${guild.id}/roles/${role.id}/members`, {
                       method: "POST",
-                      body: JSON.stringify({ user_id: Number(member) }),
+                      body: JSON.stringify({ user_id: member }),
                     }),
                   "Member assigned.",
                 ).then(() => open(role.id))
@@ -744,9 +746,30 @@ function RoleCreate({ guild, mutate }) {
   );
 }
 
+function ruleSubject(r, data) {
+  if (r.subject_type === "member") return "Everyone";
+  if (r.subject_type === "role") {
+    const role = data.roles.find((x) => x.id === String(r.subject_id));
+    return role ? role.name : `Role ${r.subject_id}`;
+  }
+  if (r.subject_type === "user") {
+    const user = data.members.find((x) => x.id === String(r.subject_id));
+    return user ? user.name : `User ${r.subject_id}`;
+  }
+  return r.subject_type;
+}
+
+function ruleScope(r, data) {
+  if (r.scope_type === "guild") return "Server-wide";
+  const channel = data.channels.find((x) => x.id === String(r.scope_id));
+  const label = channel ? channel.name : r.scope_id;
+  return r.scope_type === "category" ? `Category: ${label}` : `#${label}`;
+}
+
 function Policies({ data, guild, mutate, searchMembers }) {
   const [subjectType, setSubjectType] = useState("role"),
     [subjectTarget, setSubjectTarget] = useState(""),
+    [controlKind, setControlKind] = useState("action"),
     [key, setKey] = useState(""),
     [effect, setEffect] = useState("allow"),
     [scopeType, setScopeType] = useState("guild"),
@@ -754,6 +777,21 @@ function Policies({ data, guild, mutate, searchMembers }) {
     [confirmBroad, setConfirmBroad] = useState(false),
     [why, setWhy] = useState({ user: "", command: "", channel: "" }),
     [result, setResult] = useState(null);
+
+  const actionOptions = [
+    ...data.catalog.map((x) => ({
+      value: x.permission_key,
+      label: `${x.display_name} · ${x.category}`,
+    })),
+    ...data.permissions
+      .filter((x) => x.permission_kind === "category")
+      .map((x) => ({ value: x.permission_key, label: x.display_name })),
+    { value: "command.*", label: "All bot commands" },
+  ];
+  const policyOptions = data.permissions
+    .filter((x) => x.permission_kind === "policy")
+    .map((x) => ({ value: x.permission_key, label: x.display_name }));
+  const selectedDefinition = data.permissions.find((x) => x.permission_key === key);
 
   const canSubmit =
     key &&
@@ -769,11 +807,11 @@ function Policies({ data, guild, mutate, searchMembers }) {
           method: "POST",
           body: JSON.stringify({
             subject_type: subjectType,
-            subject_id: subjectType === "member" ? null : Number(subjectTarget),
+            subject_id: subjectType === "member" ? null : subjectTarget,
             permission_key: key,
             effect,
             scope_type: scopeType,
-            scope_id: scopeType === "guild" ? null : Number(scopeTarget),
+            scope_id: scopeType === "guild" ? null : scopeTarget,
             confirm_broad_deny: confirmBroad,
           }),
         }),
@@ -785,7 +823,12 @@ function Policies({ data, guild, mutate, searchMembers }) {
     <>
       <section className="split">
         <form className="glass form" onSubmit={submit}>
+          <span className="eyebrow">Fine-grained access</span>
           <h2>Create policy</h2>
+          <p className="muted form-intro">
+            Use allow rules as whitelists and deny rules as blacklists. More
+            specific member, channel, and category rules can make exceptions.
+          </p>
 
           <Dropdown
             required
@@ -814,19 +857,36 @@ function Policies({ data, guild, mutate, searchMembers }) {
             />
           )}
 
+          <div className="segmented" aria-label="Policy control type">
+            <button
+              type="button"
+              className={controlKind === "action" ? "selected" : "ghost"}
+              onClick={() => { setControlKind("action"); setKey(""); }}
+            >
+              Bot actions
+            </button>
+            <button
+              type="button"
+              className={controlKind === "policy" ? "selected" : "ghost"}
+              onClick={() => { setControlKind("policy"); setKey(""); }}
+            >
+              Policy powers
+            </button>
+          </div>
+
           <Dropdown
             required
             value={key}
             onChange={setKey}
-            placeholder="Choose command or category"
-            options={[
-              ...data.catalog.map((x) => ({
-                value: x.permission_key,
-                label: `${x.display_name} · ${x.category}`,
-              })),
-              { value: "command.*", label: "All commands" },
-            ]}
+            placeholder={controlKind === "action" ? "Choose a command or command group" : "Choose a policy-management power"}
+            options={controlKind === "action" ? actionOptions : policyOptions}
           />
+          {selectedDefinition && (
+            <p className="capability-note">{selectedDefinition.description}</p>
+          )}
+          {controlKind === "policy" && !selectedDefinition && (
+            <p className="capability-note">Policy powers let a role manage only the actions, people, and scopes it is explicitly covered for.</p>
+          )}
 
           <Dropdown
             required
@@ -869,14 +929,16 @@ function Policies({ data, guild, mutate, searchMembers }) {
             />
           )}
 
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={confirmBroad}
-              onChange={(e) => setConfirmBroad(e.target.checked)}
-            />
-            Confirm broad deny
-          </label>
+          {effect === "deny" && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={confirmBroad}
+                onChange={(e) => setConfirmBroad(e.target.checked)}
+              />
+              I understand this blacklist may remove access broadly
+            </label>
+          )}
 
           <button disabled={!canSubmit}>Save policy</button>
         </form>
@@ -901,7 +963,7 @@ function Policies({ data, guild, mutate, searchMembers }) {
                 <b className={r.effect}>{r.effect}</b>{" "}
                 <code>{r.permission_key}</code>
                 <small>
-                  {r.subject_type} · {r.scope_type}
+                  {ruleSubject(r, data)} · {ruleScope(r, data)}
                 </small>
               </span>
               <button

@@ -16,12 +16,18 @@ class _Acquire:
 
 
 class FakePool:
-    def __init__(self, roles=(), rules=()): self.roles, self.rules = roles, rules
+    def __init__(self, roles=(), rules=(), role_map=None, ranks=None):
+        self.roles, self.rules = roles, rules
+        self.role_map, self.ranks = role_map or {}, ranks or {}
     def acquire(self): return _Acquire(self)
     async def fetch(self, query, *args):
         if "bot_role_memberships" in query:
-            return [{"role_id": role} for role in self.roles]
+            return [{"role_id": role} for role in self.role_map.get(args[1], self.roles)]
         return self.rules
+    async def fetchval(self, query, *args):
+        if "MAX(r.rank)" in query:
+            return self.ranks.get(args[1], 0)
+        return None
 
 
 class PermissionSystemTests(unittest.IsolatedAsyncioTestCase):
@@ -128,6 +134,20 @@ class PermissionSystemTests(unittest.IsolatedAsyncioTestCase):
         ]
         decision = await evaluate(FakePool(rules=rules), guild_id=1, user_id=7, guild_owner_id=None, command_name="ban")
         self.assertFalse(decision.allowed)
+
+    async def test_target_conditions_protect_named_members_and_custom_role_ranks(self):
+        rules = [
+            {"id": 1, "subject_type": "member", "subject_id": None, "permission_key": "command.ban", "scope_type": "guild", "scope_id": None, "effect": "allow"},
+            {"id": 2, "subject_type": "member", "subject_id": None, "permission_key": "command.ban", "scope_type": "guild", "scope_id": None, "effect": "deny", "conditions": {"target": {"member_ids": [99]}}},
+            {"id": 3, "subject_type": "user", "subject_id": 7, "permission_key": "command.mute", "scope_type": "guild", "scope_id": None, "effect": "allow", "conditions": {"target": {"max_custom_role_rank": 10}}},
+        ]
+        pool = FakePool(rules=rules, ranks={88: 11})
+        protected = await evaluate(pool, guild_id=1, user_id=7, guild_owner_id=None, command_name="ban", target_user_id=99)
+        permitted = await evaluate(pool, guild_id=1, user_id=7, guild_owner_id=None, command_name="ban", target_user_id=100)
+        rank_limited = await evaluate(pool, guild_id=1, user_id=7, guild_owner_id=None, command_name="mute", target_user_id=88)
+        self.assertFalse(protected.allowed)
+        self.assertTrue(permitted.allowed)
+        self.assertFalse(rank_limited.allowed)
 
     async def test_policy_capability_uses_the_same_role_and_scope_rules(self):
         rules = [

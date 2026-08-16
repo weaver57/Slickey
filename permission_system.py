@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from typing import Any, Optional
 
 import discord
@@ -41,8 +42,7 @@ class PermissionDecision:
 COMMAND_REGISTRY: dict[str, tuple[str, str]] = {
     # Permission and server configuration
     **{name: ("configuration", "protected") for name in (
-        "permissions", "dashboard", "giveperm", "takeperm", "botperm", "setup",
-        "setprefix", "selfprefix", "setperm", "showperm", "debug", "getmem", "spawn",
+        "permissions", "dashboard", "setup", "setprefix", "selfprefix", "setperm", "showperm", "debug", "getmem", "spawn",
         "checkfunction",
     )},
     # Moderation and actions that affect another member or Discord role
@@ -151,6 +151,7 @@ def builtin_permission_definitions() -> tuple[PermissionDefinition, ...]:
             ("policy.rule.create_deny", "Create deny policies", "Create scoped deny policies."),
             ("policy.role.read", "View custom roles", "View this server's Slickey custom roles."),
             ("policy.role.create", "Create custom roles", "Create Slickey custom roles."),
+            ("policy.role.update", "Edit custom roles", "Rename or reprioritize Slickey custom roles."),
             ("policy.role.assign", "Assign custom roles", "Assign or remove Slickey custom roles."),
             ("policy.role.delete", "Delete custom roles", "Delete Slickey custom roles."),
             ("policy.audit.read", "View policy audit log", "View permission-policy change history."),
@@ -230,9 +231,6 @@ CREATE TABLE IF NOT EXISTS bot_permission_rules (
 );
 CREATE INDEX IF NOT EXISTS idx_bot_permission_rules_lookup
     ON bot_permission_rules (guild_id, subject_type, subject_id, scope_type, scope_id);
-CREATE INDEX IF NOT EXISTS idx_bot_permission_rules_evaluate
-    ON bot_permission_rules
-       (guild_id, permission_key, subject_type, subject_id, scope_type, scope_id, expires_at);
 
 CREATE TABLE IF NOT EXISTS bot_permission_definitions (
     permission_key TEXT PRIMARY KEY,
@@ -286,6 +284,12 @@ async def initialize_permission_system(pool) -> None:
                     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1,
                     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bot_permission_rules_evaluate
+                    ON bot_permission_rules
+                    (guild_id, permission_key, subject_type, subject_id,
+                        scope_type, scope_id, expires_at);
             """)
             for definition in BUILTIN_PERMISSION_DEFINITIONS:
                 await conn.execute(
@@ -472,9 +476,85 @@ def _rule_is_expired(rule: Any, now: Optional[datetime] = None) -> bool:
     return expires_at <= now
 
 
+TARGET_CONDITION_KEYS = frozenset({
+    "max_custom_role_rank", "member_ids", "exclude_member_ids",
+    "custom_role_ids", "exclude_custom_role_ids",
+})
+
+
+def validate_target_conditions(conditions: Any) -> dict[str, Any]:
+    """Validate the small, intentional condition language used for member targets.
+
+    Conditions are currently limited to target protection.  Keeping this format
+    closed avoids storing a pretend-general expression language that commands
+    cannot safely evaluate.  A rule without conditions remains unchanged.
+    """
+    if conditions in (None, {}):
+        return {}
+    if not isinstance(conditions, dict) or set(conditions) != {"target"}:
+        raise ValueError("Conditions may only contain a target object.")
+    target = conditions["target"]
+    if not isinstance(target, dict) or not target or set(target) - TARGET_CONDITION_KEYS:
+        raise ValueError("Unsupported target condition.")
+    normalized: dict[str, Any] = {}
+    for key, value in target.items():
+        if key == "max_custom_role_rank":
+            if type(value) is not int or not -100_000 <= value <= 100_000:
+                raise ValueError("target.max_custom_role_rank must be an integer between -100000 and 100000.")
+            normalized[key] = value
+            continue
+        if not isinstance(value, list) or not value or len(value) > 100 or any(type(item) is not int or item <= 0 for item in value):
+            raise ValueError(f"target.{key} must be a non-empty list of up to 100 positive IDs.")
+        normalized[key] = sorted(set(value))
+    if {"member_ids", "exclude_member_ids"} <= normalized.keys() or {"custom_role_ids", "exclude_custom_role_ids"} <= normalized.keys():
+        raise ValueError("A target condition cannot include both an allow-list and deny-list for the same target type.")
+    return {"target": normalized}
+
+
+def target_conditions_match(conditions: Any, *, target_user_id: Optional[int], target_rank: int,
+                            target_role_ids: set[int]) -> bool:
+    """Return whether a rule is applicable to this member target.
+
+    A condition never grants access by itself: it only narrows the rule on
+    which it is written.  ``member_ids``/``custom_role_ids`` create allow
+    lists; the ``exclude_*`` variants create protected target lists.
+    """
+    if not conditions:
+        return True
+    try:
+        if isinstance(conditions, str):
+            conditions = json.loads(conditions)
+        target = validate_target_conditions(conditions).get("target", {})
+    except ValueError:
+        return False
+    if target and target_user_id is None:
+        return False
+    if "max_custom_role_rank" in target and target_rank > target["max_custom_role_rank"]:
+        return False
+    if "member_ids" in target and target_user_id not in target["member_ids"]:
+        return False
+    if "exclude_member_ids" in target and target_user_id in target["exclude_member_ids"]:
+        return False
+    if "custom_role_ids" in target and not target_role_ids.intersection(target["custom_role_ids"]):
+        return False
+    if "exclude_custom_role_ids" in target and target_role_ids.intersection(target["exclude_custom_role_ids"]):
+        return False
+    return True
+
+
+TARGET_CONDITION_COMMANDS = frozenset({"ban", "mute", "unmute", "setnick", "role", "roleroulette"})
+
+
+def conditions_supported_for_permission(permission_key: str) -> bool:
+    """Target rules are safe only for commands routed through the shared guard."""
+    return permission_key in {f"command.{name}" for name in TARGET_CONDITION_COMMANDS}
+
+
 async def evaluate(
     pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], command_name: str,
     channel_id: Optional[int] = None, category_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
+    preflight_target_conditions: bool = False,
     strict_unclassified: bool = False, permission_keys_override: Optional[tuple[str, ...]] = None,
 ) -> PermissionDecision:
     """Evaluate a policy.  Specific deny wins; otherwise specific allow wins.
@@ -495,6 +575,9 @@ async def evaluate(
         role_ids = await conn.fetch(
             "SELECT role_id FROM bot_role_memberships WHERE guild_id = $1 AND user_id = $2", guild_id, user_id
         )
+        target_role_ids = await conn.fetch(
+            "SELECT role_id FROM bot_role_memberships WHERE guild_id = $1 AND user_id = $2", guild_id, target_user_id
+        ) if target_user_id is not None else ()
         subject_pairs = [("member", None), ("user", user_id)]
         subject_pairs.extend(("role", row["role_id"]) for row in role_ids)
         # The evaluator still makes the final matching decision in Python so
@@ -502,7 +585,7 @@ async def evaluate(
         # rules from the rest of a large server.
         rules = await conn.fetch(
             """SELECT id, subject_type, subject_id, permission_key, scope_type,
-                      scope_id, effect, priority, expires_at
+                      scope_id, effect, priority, conditions, expires_at
                FROM bot_permission_rules
                WHERE guild_id = $1
                  AND permission_key = ANY($2::text[])
@@ -526,12 +609,25 @@ async def evaluate(
     candidates = []
     allowed_subjects = set(subject_pairs)
     allowed_scopes = set(_scope_candidates(channel_id, category_id))
+    target_roles = {row["role_id"] for row in target_role_ids}
+    target_rank = await effective_rank(pool, guild_id, target_user_id) if target_user_id is not None else 0
     for rule in rules:
         if (rule["subject_type"], rule["subject_id"]) not in allowed_subjects:
             continue
         if (rule["scope_type"], rule["scope_id"]) not in allowed_scopes or rule["permission_key"] not in key_rank:
             continue
         if _rule_is_expired(rule):
+            continue
+        conditions = rule.get("conditions", {})
+        # The universal command gate runs before handlers have parsed a target.
+        # It may admit a target-limited allow so the shared target guard can
+        # make the final decision, but it must never turn a target-limited deny
+        # into a blanket command denial.
+        if target_user_id is None and preflight_target_conditions and conditions and rule["effect"] == "deny":
+            continue
+        if not (target_user_id is None and preflight_target_conditions and conditions) and not target_conditions_match(
+            conditions, target_user_id=target_user_id, target_rank=target_rank, target_role_ids=target_roles,
+        ):
             continue
         # More concrete key/scope/subject always wins. At the same specificity,
         # a higher explicit priority wins.  A deny is safer only when every
@@ -556,6 +652,7 @@ async def evaluate(
         "permission_key": item[1]["permission_key"], "subject_type": item[1]["subject_type"],
         "subject_id": item[1]["subject_id"], "scope_type": item[1]["scope_type"],
         "scope_id": item[1]["scope_id"], "priority": item[1].get("priority", 0),
+        "conditions": item[1].get("conditions", {}),
         "expires_at": item[1].get("expires_at"), "selected": index == 0,
     } for index, item in enumerate(ordered))
     return PermissionDecision(rule["effect"] == "allow", f"{rule['effect'].title()} rule #{rule['id']}", rule["id"], trace)
@@ -1001,6 +1098,7 @@ def install(bot: commands.Bot, pool_getter) -> None:
         decision = await evaluate(
             pool_getter(), guild_id=ctx.guild.id, user_id=ctx.author.id, guild_owner_id=ctx.guild.owner_id,
             command_name=command_name, channel_id=getattr(ctx.channel, "id", None), category_id=getattr(ctx.channel, "category_id", None),
+            preflight_target_conditions=command_name in TARGET_CONDITION_COMMANDS,
             strict_unclassified=command_name in getattr(bot, "_slickey_unclassified_commands", set()),
         )
         if decision.allowed:
@@ -1023,6 +1121,7 @@ def install(bot: commands.Bot, pool_getter) -> None:
             pool_getter(), guild_id=interaction.guild.id, user_id=interaction.user.id, guild_owner_id=interaction.guild.owner_id,
             command_name=command_name, channel_id=getattr(interaction.channel, "id", None),
             category_id=getattr(interaction.channel, "category_id", None),
+            preflight_target_conditions=command_name in TARGET_CONDITION_COMMANDS,
             strict_unclassified=command_name in getattr(bot, "_slickey_unclassified_commands", set()),
         )
         if decision.allowed:

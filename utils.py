@@ -1610,9 +1610,20 @@ async def permissions_check_decorator(context, target, command_name: str) -> boo
     author = context.user if hasattr(context, "user") else context.author
     guild = context.guild
     reply = (lambda message: context.response.send_message(message, ephemeral=True)) if hasattr(context, "user") else context.reply
-    decision = await evaluate(db_pool, guild_id=guild.id, user_id=author.id, guild_owner_id=getattr(guild, "owner_id", None), command_name=command_name, channel_id=getattr(context.channel, "id", None), category_id=getattr(context.channel, "category_id", None))
+    if target is None or not getattr(target, "id", None):
+        await reply("That member is no longer available in this server.")
+        return False
+    # This is the single target-aware enforcement point used by the member
+    # moderation and role commands.  A matching rule may constrain the target
+    # by custom-role rank or explicit protected member/custom-role lists.
+    decision = await evaluate(
+        db_pool, guild_id=guild.id, user_id=author.id,
+        guild_owner_id=getattr(guild, "owner_id", None), command_name=command_name,
+        channel_id=getattr(context.channel, "id", None),
+        category_id=getattr(context.channel, "category_id", None), target_user_id=target.id,
+    )
     if not decision.allowed:
-        await reply(f"You cannot use `{command_name}`. {decision.reason}.")
+        await reply(f"You cannot use `{command_name}` on {getattr(target, 'display_name', 'that member')}. {decision.reason}.")
         return False
     if author.id == BOT_OWNER_ID or author.id == getattr(guild, "owner_id", None):
         return True

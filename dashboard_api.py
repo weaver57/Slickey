@@ -23,10 +23,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from permission_system import (BOT_CREATOR_ID, COMMAND_CATALOG, ROLE_PRESETS, create_preset,
+from permission_system import (BOT_CREATOR_ID, COMMAND_REGISTRY, ROLE_PRESETS, create_preset,
                                effective_rank, evaluate, initialize_permission_system,
                                actor_can_delegate_permission, actor_can_delegate_preset,
-                               is_broad_deny, is_superuser, permission_key_is_registered)
+                               actor_can_administer_policy, is_broad_deny,
+                               canonical_command_name, permission_key_is_registered,
+                               validate_target_conditions, conditions_supported_for_permission)
 
 # The bot and dashboard share the project-level configuration when run locally.
 # Environment variables supplied by a host still take precedence over this file.
@@ -125,6 +127,7 @@ class RuleCreate(BaseModel):
     scope_type: Literal["guild", "category", "channel"] = "guild"
     scope_id: int | None = None
     effect: Literal["allow", "deny"]
+    conditions: dict[str, Any] = Field(default_factory=dict)
     confirm_broad_deny: bool = False
 
 
@@ -137,6 +140,13 @@ class ExplainRequest(BaseModel):
     command_name: str
     channel_id: int | None = None
     category_id: int | None = None
+
+
+def _canonical_permission_key(permission_key: str) -> str:
+    key = permission_key.lower().strip()
+    if key.startswith("command.") and key != "command.*":
+        return f"command.{canonical_command_name(key.removeprefix('command.'))}"
+    return key
 
 
 def _require_configuration() -> None:
@@ -202,10 +212,7 @@ async def _discord_bot_get(path: str) -> Any:
             if "/members" in path:
                 raise HTTPException(
                     503,
-                    "Discord did not expose this server's member list to the dashboard bot. "
-                    "This does not mean the bot is absent (channel access may still work). "
-                    "Confirm Server Members Intent is enabled for the application that owns BOT_TOKEN_2, "
-                    "then restart the bot and dashboard API.",
+                    "Discord did not expose this server's member list to the dashboard bot.",
                 )
             raise HTTPException(404, "The bot cannot find that server.")
         response.raise_for_status()
@@ -233,6 +240,25 @@ async def _validate_rule_targets(guild_id: int, body: RuleCreate) -> None:
             raise HTTPException(422, "The selected channel/category does not belong to this server or has the wrong type.")
     if body.subject_type == "user":
         await _validate_member(guild_id, body.subject_id)
+
+
+async def _validate_rule_conditions(pool, guild_id: int, permission_key: str, conditions: dict[str, Any]) -> dict[str, Any]:
+    """Validate only target constraints that active command handlers enforce."""
+    try:
+        normalized = validate_target_conditions(conditions)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if normalized and not conditions_supported_for_permission(permission_key):
+        raise HTTPException(422, "Target conditions are currently supported only for ban, mute, unmute, setnick, role, and roleroulette.")
+    target = normalized.get("target", {})
+    role_ids = target.get("custom_role_ids", []) + target.get("exclude_custom_role_ids", [])
+    if role_ids:
+        existing = await pool.fetch(
+            "SELECT id FROM bot_permission_roles WHERE guild_id=$1 AND id = ANY($2::bigint[])", guild_id, role_ids
+        )
+        if {row["id"] for row in existing} != set(role_ids):
+            raise HTTPException(422, "A target custom role does not belong to this server.")
+    return normalized
 
 
 async def _validate_member(guild_id: int, user_id: int) -> None:
@@ -265,17 +291,25 @@ async def _rule_rank_guard(request: Request, session: DashboardSession, guild_id
     await _require_below_rank(request, session, guild_id, rank)
 
 
-async def _require_manager(request: Request, session: DashboardSession, guild_id: int) -> None:
+async def _member_rank_guard(request: Request, session: DashboardSession, guild_id: int, user_id: int) -> None:
+    """Delegates may not alter a peer or superior through a direct rule/assignment."""
+    target_rank = await effective_rank(request.app.state.pool, guild_id, user_id)
+    await _require_below_rank(request, session, guild_id, target_rank)
+
+
+async def _require_manager(
+    request: Request, session: DashboardSession, guild_id: int, action: str,
+    scope_type: str = "guild", scope_id: int | None = None,
+) -> None:
     await _can_open_guild(request, session, guild_id)
     user_id = int(session.user["id"])
-    if user_id == BOT_CREATOR_ID:
-        return
-    if await _live_guild_owner_id(request, guild_id) == user_id:
-        return
-    decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=user_id, guild_owner_id=None,
-                              command_name="permissions")
-    if not (decision.allowed and decision.matched_rule_id is not None):
-        raise HTTPException(403, "You have dashboard access but not permission-management access.")
+    allowed = await actor_can_administer_policy(
+        request.app.state.pool, guild_id=guild_id, user_id=user_id,
+        guild_owner_id=await _live_guild_owner_id(request, guild_id), action=action,
+        scope_type=scope_type, scope_id=scope_id,
+    )
+    if not allowed:
+        raise HTTPException(403, f"You need the custom {action} permission for this scope.")
 
 
 async def _audit(request: Request, guild_id: int, actor_id: int, action: str, payload: dict[str, Any]) -> None:
@@ -395,7 +429,7 @@ async def roles(guild_id: int, request: Request, slickey_session: str | None = C
 
 @app.post("/api/guilds/{guild_id}/roles")
 async def create_role(guild_id: int, body: RoleCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.create")
     await _require_below_rank(request, session, guild_id, body.rank)
     try:
         role_id = await request.app.state.pool.fetchval(
@@ -409,7 +443,7 @@ async def create_role(guild_id: int, body: RoleCreate, request: Request, slickey
 
 @app.delete("/api/guilds/{guild_id}/roles/{role_id}")
 async def delete_role(guild_id: int, role_id: int, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.delete")
     rank = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if rank is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, rank)
@@ -424,11 +458,12 @@ async def delete_role(guild_id: int, role_id: int, request: Request, slickey_ses
 
 @app.post("/api/guilds/{guild_id}/roles/{role_id}/members")
 async def assign_role(guild_id: int, role_id: int, body: RoleAssignment, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.assign")
     rank = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if rank is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, rank)
     await _validate_member(guild_id, body.user_id)
+    await _member_rank_guard(request, session, guild_id, body.user_id)
     await request.app.state.pool.execute("INSERT INTO bot_role_memberships (guild_id,role_id,user_id,assigned_by) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", guild_id, role_id, body.user_id, int(session.user["id"]))
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.role.assign", {"role_id": role_id, "user_id": body.user_id})
     return {"ok": True}
@@ -446,7 +481,7 @@ async def role_detail(guild_id: int, role_id: int, request: Request, slickey_ses
 
 @app.put("/api/guilds/{guild_id}/roles/{role_id}")
 async def update_role(guild_id: int, role_id: int, body: RoleUpdate, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.update")
     current = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if current is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, max(current, body.rank))
@@ -460,10 +495,11 @@ async def update_role(guild_id: int, role_id: int, body: RoleUpdate, request: Re
 
 @app.delete("/api/guilds/{guild_id}/roles/{role_id}/members/{user_id}")
 async def remove_role_member(guild_id: int, role_id: int, user_id: int, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.assign")
     rank = await request.app.state.pool.fetchval("SELECT rank FROM bot_permission_roles WHERE guild_id=$1 AND id=$2", guild_id, role_id)
     if rank is None: raise HTTPException(404, "Role not found")
     await _require_below_rank(request, session, guild_id, rank)
+    await _member_rank_guard(request, session, guild_id, user_id)
     await request.app.state.pool.execute("DELETE FROM bot_role_memberships WHERE guild_id=$1 AND role_id=$2 AND user_id=$3", guild_id, role_id, user_id)
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.role.remove_member", {"role_id": role_id, "user_id": user_id})
     return {"ok": True}
@@ -471,30 +507,35 @@ async def remove_role_member(guild_id: int, role_id: int, user_id: int, request:
 
 @app.get("/api/guilds/{guild_id}/rules")
 async def rules(guild_id: int, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _can_open_guild(request, session, guild_id)
-    rows = await request.app.state.pool.fetch("SELECT id,subject_type,subject_id,permission_key,scope_type,scope_id,effect FROM bot_permission_rules WHERE guild_id=$1 ORDER BY id DESC", guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.rule.read")
+    rows = await request.app.state.pool.fetch("SELECT id,subject_type,subject_id,permission_key,scope_type,scope_id,effect,conditions,priority,revision,updated_at FROM bot_permission_rules WHERE guild_id=$1 ORDER BY id DESC", guild_id)
     return [dict(row) for row in rows]
 
 
 @app.post("/api/guilds/{guild_id}/rules")
 async def create_rule(guild_id: int, body: RuleCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session)
+    permission_key = _canonical_permission_key(body.permission_key)
     if (body.subject_type == "member") != (body.subject_id is None) or (body.scope_type == "guild") != (body.scope_id is None):
         raise HTTPException(422, "Subject/scope IDs do not match their selected types.")
-    if is_broad_deny(body.permission_key, body.scope_type, body.effect) and not body.confirm_broad_deny:
+    if is_broad_deny(permission_key, body.scope_type, body.effect) and not body.confirm_broad_deny:
         raise HTTPException(422, "This broad deny could lock down the server. Confirm it explicitly before saving.")
-    if not await permission_key_is_registered(request.app.state.pool, body.permission_key):
+    if not await permission_key_is_registered(request.app.state.pool, permission_key):
         raise HTTPException(422, "Choose a command or category from the command catalogue.")
-    if body.effect == "allow" and not await actor_can_delegate_permission(
+    conditions = await _validate_rule_conditions(request.app.state.pool, guild_id, permission_key, body.conditions)
+    if not await actor_can_delegate_permission(
         request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
         guild_owner_id=await _live_guild_owner_id(request, guild_id),
-        permission_key=body.permission_key,
+        permission_key=permission_key,
+        scope_type=body.scope_type, scope_id=body.scope_id, effect=body.effect,
     ):
-        raise HTTPException(403, "You can only grant permissions you currently hold yourself.")
+        raise HTTPException(403, "You can only create policies within your own permission and scope coverage.")
     await _validate_rule_targets(guild_id, body)
     await _rule_rank_guard(request, session, guild_id, body.subject_type, body.subject_id)
-    rule_id = await request.app.state.pool.fetchval("""INSERT INTO bot_permission_rules (guild_id,subject_type,subject_id,permission_key,scope_type,scope_id,effect,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id""", guild_id, body.subject_type, body.subject_id, body.permission_key.lower().strip(), body.scope_type, body.scope_id, body.effect, int(session.user["id"]))
-    await _audit(request, guild_id, int(session.user["id"]), "dashboard.rule.create", {"rule_id": rule_id})
+    if body.subject_type == "user":
+        await _member_rank_guard(request, session, guild_id, body.subject_id)
+    rule_id = await request.app.state.pool.fetchval("""INSERT INTO bot_permission_rules (guild_id,subject_type,subject_id,permission_key,scope_type,scope_id,effect,conditions,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) RETURNING id""", guild_id, body.subject_type, body.subject_id, permission_key, body.scope_type, body.scope_id, body.effect, json.dumps(conditions), int(session.user["id"]))
+    await _audit(request, guild_id, int(session.user["id"]), "dashboard.rule.create", {"rule_id": rule_id, "conditions": conditions})
     return {"id": rule_id}
 
 
@@ -503,7 +544,17 @@ async def catalog(request: Request):
     rows = await request.app.state.pool.fetch("SELECT command_path,permission_key,display_name,description,category,default_access,command_kind FROM bot_command_catalog ORDER BY category,display_name")
     if rows:
         return [dict(row) for row in rows]
-    return [{"command_path": key, "permission_key": f"command.{key}", "display_name": value[0], "description": "", "category": value[1], "default_access": "public", "command_kind": "legacy"} for key, value in sorted(COMMAND_CATALOG.items())]
+    return [{"command_path": key, "permission_key": f"command.{key}", "display_name": key.replace("_", " ").title(), "description": "", "category": value[0], "default_access": value[1], "command_kind": "command"} for key, value in sorted(COMMAND_REGISTRY.items())]
+
+
+@app.get("/api/permissions")
+async def permission_definitions(request: Request):
+    """Expose command and policy-management capabilities to the dashboard."""
+    rows = await request.app.state.pool.fetch(
+        """SELECT permission_key, display_name, description, category, default_access, permission_kind
+           FROM bot_permission_definitions ORDER BY permission_kind, category, display_name"""
+    )
+    return [dict(row) for row in rows]
 
 
 @app.get("/api/presets")
@@ -513,7 +564,7 @@ async def presets():
 
 @app.post("/api/guilds/{guild_id}/roles/preset")
 async def add_preset(guild_id: int, body: PresetCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.role.create")
     await _require_below_rank(request, session, guild_id, ROLE_PRESETS[body.preset]["rank"])
     if not await actor_can_delegate_preset(request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
                                            guild_owner_id=await _live_guild_owner_id(request, guild_id), preset_key=body.preset):
@@ -554,7 +605,7 @@ async def members(guild_id: int, request: Request, query: str = "", limit: int =
 
 @app.post("/api/guilds/{guild_id}/explain")
 async def explain(guild_id: int, body: ExplainRequest, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _can_open_guild(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.rule.read")
     decision = await evaluate(request.app.state.pool, guild_id=guild_id, user_id=body.user_id,
                               guild_owner_id=await _live_guild_owner_id(request, guild_id),
                               command_name=body.command_name, channel_id=body.channel_id, category_id=body.category_id)
@@ -564,10 +615,13 @@ async def explain(guild_id: int, body: ExplainRequest, request: Request, slickey
 
 @app.delete("/api/guilds/{guild_id}/rules/{rule_id}")
 async def delete_rule(guild_id: int, rule_id: int, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
-    existing = await request.app.state.pool.fetchrow("SELECT subject_type,subject_id FROM bot_permission_rules WHERE guild_id=$1 AND id=$2", guild_id, rule_id)
+    session = await _session(request, slickey_session)
+    existing = await request.app.state.pool.fetchrow("SELECT subject_type,subject_id,scope_type,scope_id FROM bot_permission_rules WHERE guild_id=$1 AND id=$2", guild_id, rule_id)
     if not existing: raise HTTPException(404, "Rule not found")
+    await _require_manager(request, session, guild_id, "policy.rule.delete", existing["scope_type"], existing["scope_id"])
     await _rule_rank_guard(request, session, guild_id, existing["subject_type"], existing["subject_id"])
+    if existing["subject_type"] == "user":
+        await _member_rank_guard(request, session, guild_id, existing["subject_id"])
     result = await request.app.state.pool.execute("DELETE FROM bot_permission_rules WHERE guild_id=$1 AND id=$2", guild_id, rule_id)
     if result.endswith("0"): raise HTTPException(404, "Rule not found")
     await _audit(request, guild_id, int(session.user["id"]), "dashboard.rule.delete", {"rule_id": rule_id})
@@ -576,32 +630,40 @@ async def delete_rule(guild_id: int, rule_id: int, request: Request, slickey_ses
 
 @app.put("/api/guilds/{guild_id}/rules/{rule_id}")
 async def update_rule(guild_id: int, rule_id: int, body: RuleCreate, request: Request, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id)
+    session = await _session(request, slickey_session)
+    permission_key = _canonical_permission_key(body.permission_key)
     if (body.subject_type == "member") != (body.subject_id is None) or (body.scope_type == "guild") != (body.scope_id is None):
         raise HTTPException(422, "Subject/scope IDs do not match their selected types.")
-    if is_broad_deny(body.permission_key, body.scope_type, body.effect) and not body.confirm_broad_deny:
+    if is_broad_deny(permission_key, body.scope_type, body.effect) and not body.confirm_broad_deny:
         raise HTTPException(422, "Confirm this broad deny before saving.")
-    if not await permission_key_is_registered(request.app.state.pool, body.permission_key):
+    if not await permission_key_is_registered(request.app.state.pool, permission_key):
         raise HTTPException(422, "Choose a command or category from the command catalogue.")
-    if body.effect == "allow" and not await actor_can_delegate_permission(
+    conditions = await _validate_rule_conditions(request.app.state.pool, guild_id, permission_key, body.conditions)
+    if not await actor_can_delegate_permission(
         request.app.state.pool, guild_id=guild_id, user_id=int(session.user["id"]),
         guild_owner_id=await _live_guild_owner_id(request, guild_id),
-        permission_key=body.permission_key,
+        permission_key=permission_key,
+        scope_type=body.scope_type, scope_id=body.scope_id, effect=body.effect,
     ):
-        raise HTTPException(403, "You can only grant permissions you currently hold yourself.")
+        raise HTTPException(403, "You can only create policies within your own permission and scope coverage.")
     await _validate_rule_targets(guild_id, body)
-    existing = await request.app.state.pool.fetchrow("SELECT subject_type,subject_id FROM bot_permission_rules WHERE guild_id=$1 AND id=$2", guild_id, rule_id)
+    existing = await request.app.state.pool.fetchrow("SELECT subject_type,subject_id,scope_type,scope_id FROM bot_permission_rules WHERE guild_id=$1 AND id=$2", guild_id, rule_id)
     if not existing: raise HTTPException(404, "Rule not found")
+    await _require_manager(request, session, guild_id, "policy.rule.update", existing["scope_type"], existing["scope_id"])
     await _rule_rank_guard(request, session, guild_id, existing["subject_type"], existing["subject_id"])
     await _rule_rank_guard(request, session, guild_id, body.subject_type, body.subject_id)
-    result = await request.app.state.pool.execute("""UPDATE bot_permission_rules SET subject_type=$3,subject_id=$4,permission_key=$5,scope_type=$6,scope_id=$7,effect=$8 WHERE guild_id=$1 AND id=$2""", guild_id, rule_id, body.subject_type, body.subject_id, body.permission_key.lower().strip(), body.scope_type, body.scope_id, body.effect)
+    if existing["subject_type"] == "user":
+        await _member_rank_guard(request, session, guild_id, existing["subject_id"])
+    if body.subject_type == "user":
+        await _member_rank_guard(request, session, guild_id, body.subject_id)
+    result = await request.app.state.pool.execute("""UPDATE bot_permission_rules SET subject_type=$3,subject_id=$4,permission_key=$5,scope_type=$6,scope_id=$7,effect=$8,conditions=$9::jsonb,revision=revision+1,updated_at=NOW() WHERE guild_id=$1 AND id=$2""", guild_id, rule_id, body.subject_type, body.subject_id, permission_key, body.scope_type, body.scope_id, body.effect, json.dumps(conditions))
     if result.endswith("0"): raise HTTPException(404, "Rule not found")
-    await _audit(request, guild_id, int(session.user["id"]), "dashboard.rule.update", {"rule_id": rule_id})
+    await _audit(request, guild_id, int(session.user["id"]), "dashboard.rule.update", {"rule_id": rule_id, "conditions": conditions})
     return {"ok": True}
 
 
 @app.get("/api/guilds/{guild_id}/audit")
 async def audit_log(guild_id: int, request: Request, limit: int = 100, slickey_session: str | None = Cookie(default=None)):
-    session = await _session(request, slickey_session); await _can_open_guild(request, session, guild_id)
+    session = await _session(request, slickey_session); await _require_manager(request, session, guild_id, "policy.audit.read")
     rows = await request.app.state.pool.fetch("SELECT id,actor_id,action,payload,created_at FROM bot_permission_audit_log WHERE guild_id=$1 ORDER BY id DESC LIMIT $2", guild_id, min(max(limit, 1), 200))
     return [dict(row) for row in rows]
