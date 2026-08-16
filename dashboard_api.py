@@ -97,7 +97,7 @@ async def csrf_protection(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/api/health", methods=["GET", "HEAD"])
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
     """Small readiness endpoint used by local startup checks and deployments."""
     await request.app.state.pool.fetchval("SELECT 1")
