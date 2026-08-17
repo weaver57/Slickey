@@ -405,7 +405,7 @@ async def refresh_session(request: Request, response: Response, slickey_session:
 async def get_csrf_token(request: Request, slickey_session: str | None = Cookie(default=None), response: Response = None):
     await _session(request, slickey_session)  # just validates they're logged in
     token = secrets.token_urlsafe(32)
-    response.set_cookie(CSRF_COOKIE, token, httponly=False, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
+    response.set_cookie(CSRF_COOKIE, token, httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
     return {"csrf_token": token}
 
 @app.get("/api/me")
