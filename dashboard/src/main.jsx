@@ -3,11 +3,8 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API = import.meta.env.VITE_DASHBOARD_API || "http://localhost:8000";
-const csrf = () =>
-  document.cookie
-    .split("; ")
-    .find((x) => x.startsWith("slickey_csrf="))
-    ?.split("=")[1] || "";
+let csrfToken = "";
+function setCsrfToken(t) { csrfToken = t; }
 async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase(),
     headers = {
@@ -15,7 +12,7 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     };
   if (!["GET", "HEAD", "OPTIONS"].includes(method))
-    headers["X-CSRF-Token"] = csrf();
+    headers["X-CSRF-Token"] = csrfToken;
   const r = await fetch(`${API}${path}`, {
     credentials: "include",
     headers,
@@ -288,15 +285,18 @@ function App() {
     });
     setData((d) => ({ ...d, roles, rules, members, channels, audit }));
   };
-  const searchMembers = async (guildId, query) =>
-    api(`/api/guilds/${guildId}/members?query=${encodeURIComponent(query)}&limit=50`);
+  const searchMembers = async (guildId, query) => api(`/api/guilds/${guildId}/members?query=${encodeURIComponent(query)}&limit=50`);
   useEffect(() => {
     (async () => {
       try {
         const q = new URLSearchParams(location.search);
         if (q.has("code")) {
-          await api(`/api/auth/callback?${q}`);
+          const result = await api(`/api/auth/callback?${q}`);
+          setCsrfToken(result.csrf_token);
           history.replaceState({}, "", location.pathname);
+        } else {
+          const { csrf_token } = await api("/api/csrf");
+          setCsrfToken(csrf_token);
         }
         const [me, guilds, catalog, permissions, presets] = await Promise.all([
           api("/api/me"),

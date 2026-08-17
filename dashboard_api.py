@@ -81,14 +81,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Slickey Dashboard API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN], allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
 
 
 @app.middleware("http")
 async def csrf_protection(request: Request, call_next):
     """Cookie-authenticated writes require an unguessable double-submit token."""
-    exempt = {"/api/auth/login", "/api/auth/callback", "/api/health"}
+    exempt = {"/api/auth/login", "/api/auth/callback", "/api/health", "/api/csrf"}
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path.startswith("/api/") and request.url.path not in exempt:
         cookie = request.cookies.get(CSRF_COOKIE, "")
         header = request.headers.get("X-CSRF-Token", "")
@@ -96,6 +94,9 @@ async def csrf_protection(request: Request, call_next):
             return JSONResponse(status_code=403, content={"detail": "Your security token expired. Refresh the dashboard and try again."})
     return await call_next(request)
 
+
+app.add_middleware(CORSMiddleware, allow_origins=[FRONTEND_ORIGIN], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health(request: Request):
@@ -362,10 +363,12 @@ async def callback(request: Request, response: Response, code: str, state: str, 
            VALUES ($1, $2, $3, $4::jsonb, NOW() + INTERVAL '8 hours')""",
         _hash_session(session_id), int(user["id"]), user["username"], json.dumps(guilds),
     )
+    
+    csrf_token = secrets.token_urlsafe(32)
     response.set_cookie("slickey_session", session_id, httponly=True, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
-    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
+    response.set_cookie(CSRF_COOKIE, csrf_token, httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
     response.delete_cookie("slickey_oauth_state", path="/api/auth")
-    return {"ok": True, "redirect": FRONTEND_ORIGIN}
+    return {"ok": True, "redirect": FRONTEND_ORIGIN, "csrf_token": csrf_token}
 
 
 @app.post("/api/auth/logout")
@@ -393,10 +396,17 @@ async def refresh_session(request: Request, response: Response, slickey_session:
         "UPDATE dashboard_sessions SET token=$1, expires_at=NOW() + INTERVAL '8 hours' WHERE token=$2",
         _hash_session(new_token), _hash_session(slickey_session),
     )
+    csrf_token = secrets.token_urlsafe(32)
     response.set_cookie("slickey_session", new_token, httponly=True, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
-    response.set_cookie(CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
-    return {"ok": True, "username": session.user["username"]}
+    response.set_cookie(CSRF_COOKIE, csrf_token, httponly=False, secure=COOKIE_SECURE, samesite="none", max_age=8 * 3600, path="/")
+    return {"ok": True, "username": session.user["username"], "csrf_token": csrf_token}
 
+@app.get("/api/csrf")
+async def get_csrf_token(request: Request, slickey_session: str | None = Cookie(default=None), response: Response = None):
+    await _session(request, slickey_session)  # just validates they're logged in
+    token = secrets.token_urlsafe(32)
+    response.set_cookie(CSRF_COOKIE, token, httponly=False, secure=COOKIE_SECURE, samesite="lax", max_age=8 * 3600, path="/")
+    return {"csrf_token": token}
 
 @app.get("/api/me")
 async def me(request: Request, slickey_session: str | None = Cookie(default=None)):
