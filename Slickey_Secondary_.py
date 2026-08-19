@@ -320,6 +320,40 @@ async def toggle_spawn(interaction: discord.Interaction, action: app_commands.Ch
     await interaction.response.send_message(f"Spawn has been **{action.name.upper()}D** for this server.", ephemeral=False)
 
 
+# --- Hybrid `say` (works as both !say and /say) ---
+@commands.hybrid_command(name="say", description="Send an anonymous DM to a user from this server.", help="Send an anonymous DM to a user from this server.\n**Syntax**: say @user Your message here")
+@app_commands.describe(user="The user to send the DM to", prompt="The message to send")
+async def say_hybrid(ctx: commands.Context, user: discord.Member, *, prompt: str):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "say"):
+        return
+    if not ctx.interaction:  # text invocation: delete the command message
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+    server_name = ctx.guild.name if ctx.guild else "a server"
+    dm_message = f"You got a message from someone in **{server_name}**: {prompt}"
+    try:
+        await user.send(dm_message)
+        if ctx.interaction:
+            await ctx.send("Message sent successfully.", ephemeral=True)
+        else:
+            await ctx.send("Message sent successfully.")
+    except discord.Forbidden:
+        msg = "I cannot send a DM to that user. They may have DMs disabled."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+    except Exception as e:
+        msg = f"An error occurred while sending the DM: {e}"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+
+
+# <----REMOVE----> Begin old text-only `say`
 @commands.command(name="say",help=f"Send an anonymous DM to a user from this server.\n**Syntax**: say @user Your message here")
 async def say_text(ctx: commands.Context, user: discord.Member, *, prompt: str):
     if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "say"):
@@ -339,6 +373,7 @@ async def say_text(ctx: commands.Context, user: discord.Member, *, prompt: str):
         await ctx.send(f"An error occurred while sending the DM: {e}")
 
 
+# <----REMOVE----> Begin old slash-only `say`
 @app_commands.command(name="say", description="Send an anonymous DM to a user from this server.")
 @app_commands.describe(user="The user to send the DM to", prompt="The message to send")
 async def say(interaction: discord.Interaction, user: discord.Member, prompt: str):
@@ -355,6 +390,43 @@ async def say(interaction: discord.Interaction, user: discord.Member, prompt: st
     except Exception as e:
         await interaction.response.send_message(f"An error occurred while sending the DM: {e}", ephemeral=True)
 
+# --- Hybrid `ping` (works as both !ping and /ping) ---
+@commands.hybrid_command(name="ping", aliases=["Ping", "PING", "Pg", "pg", "PG"], description="Returns your ping along with a few stats.", help="Returns your ping along with a few stats.\n**Syntax**: ping")
+async def ping_hybrid(ctx: commands.Context):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "ping"):
+        msg = "You are blocked from using ping command."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+    latency = ctx.bot.latency * 1000
+    now = datetime.utcnow()
+    delta = now - BOT_START_TIME
+    days, remainder = divmod(int(delta.total_seconds()), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
+    total_guilds = len(ctx.bot.guilds)
+    proc = psutil.Process(os.getpid())
+    mem = proc.memory_info().rss / 1024**2
+    cpu_pct = psutil.cpu_percent(interval=0.1)
+    text_cmds = len(ctx.bot.commands)
+    slash_cmds = len(ctx.bot.tree.get_commands())
+    embed = discord.Embed(title="🏓 Pong! Bot Stats", color=discord.Color.blurple(), timestamp=now)
+    embed.add_field(name="✨ Latency", value=f"`{latency:.2f} ms`", inline=True)
+    embed.add_field(name="⏱️ Uptime",  value=f"`{uptime_str}`", inline=True)
+    embed.add_field(name="🌐 Servers", value=f"`{total_guilds}`", inline=True)
+    embed.add_field(name="📚 Text Cmds",  value=f"`{text_cmds}`", inline=True)
+    embed.add_field(name="📜 Slash Cmds", value=f"`{slash_cmds}`", inline=True)
+    embed.add_field(name="💾 Memory", value=f"`{mem:.1f} MB`", inline=True)
+    embed.add_field(name="⚙️ CPU",    value=f"`{cpu_pct:.1f}%`", inline=True)
+    requester = ctx.author if not ctx.interaction else ctx.interaction.user
+    embed.set_footer(text=f"Requested by {requester}", icon_url=requester.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+# <----REMOVE----> Begin old text-only `ping`
 @commands.command(name="ping", aliases=["Ping", "PING", "Pg", "pg", "PG"], help=f"Returns your ping along with a few stats.\n**Syntax**: ping")
 async def ping_text(ctx: commands.Context):
     if await is_command_blocked(ctx.guild.id, ctx.author.id, "ping"):
@@ -396,6 +468,7 @@ async def ping_text(ctx: commands.Context):
     return await ctx.send(embed=embed)
 
 
+# <----REMOVE----> Begin old slash-only `ping`
 @app_commands.command(name="ping", description="Returns your ping along with a few stats.")
 async def ping(interaction: discord.Interaction):
     if await is_command_blocked(interaction.guild.id, interaction.user.id, "ping"):
@@ -441,6 +514,34 @@ async def ping(interaction: discord.Interaction):
 
 
 
+# --- Hybrid `echo` (works as both !echo and /echo) ---
+@commands.hybrid_command(name="echo", aliases=["Echo", "ECHO", "ec", "Ec", "EC"], description="Make the bot repeat your message anonymously", help="Make the bot repeat your message anonymously with an added functionality of using message ID for giving replied messages.\n**Syntax**: echo message <reply_to>")
+@app_commands.describe(message="The message you want the bot to repeat", reply_to="The message ID to reply to")
+async def echo_hybrid(ctx: commands.Context, message: str, reply_to: str = None):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "echo"):
+        return
+    if not ctx.interaction:  # text invocation
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        parts = message.split()
+        if parts and parts[-1].isdigit():
+            reply_to = parts[-1]
+            message = " ".join(parts[:-1])
+    if reply_to:
+        try:
+            target_message = await ctx.channel.fetch_message(int(reply_to))
+            await ctx.send(message, reference=target_message, allowed_mentions=safe)
+        except Exception:
+            await ctx.send(message, allowed_mentions=safe)
+    else:
+        await ctx.send(message, allowed_mentions=safe)
+    if ctx.interaction:
+        await ctx.send("Message sent anonymously!", ephemeral=True)
+
+
+# <----REMOVE----> Begin old slash-only `echo`
 @app_commands.command(name="echo", description="Make the bot repeat your message anonymously")
 @app_commands.describe(message="The message you want the bot to repeat", reply_to="The message ID to reply to")
 async def echo(interaction: discord.Interaction, message: str, reply_to: str = None):
@@ -458,6 +559,7 @@ async def echo(interaction: discord.Interaction, message: str, reply_to: str = N
         await interaction.channel.send(message, allowed_mentions=safe)
 
 
+# <----REMOVE----> Begin old text-only `echo`
 @commands.command(name="echo", aliases=["Echo", "ECHO", "ec", "Ec", "EC"],
              help="Make the bot repeat your message anonymously with an added functionality of using message ID for giving replied messages.\n**Syntax**: echo message <reply_to>")
 @commands.guild_only()
@@ -484,6 +586,20 @@ async def echo_text(ctx: commands.Context, *, message: str, reply_to: str = None
         await ctx.send(message, allowed_mentions=safe)
 
 
+# --- Hybrid `hello` (works as both !hello and /hello) ---
+@commands.hybrid_command(name="hello", aliases=["Hello", "HELLO"], description="Says hello back to you!", help="Says hello back to you!")
+async def hello_hybrid(ctx: commands.Context):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "hello"):
+        msg = "You are blocked from using `hello` command."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+        return
+    await ctx.send(f"Hello {ctx.author.mention}! :>")
+
+
+# <----REMOVE----> Begin old slash-only `hello`
 @app_commands.command(name="hello", description="Says hello back to you!")
 async def hello(interaction: discord.Interaction):
     if await is_command_blocked(interaction.guild.id, interaction.user.id, "hello"):
@@ -492,6 +608,7 @@ async def hello(interaction: discord.Interaction):
     await interaction.response.send_message(f"Hello {interaction.user.mention}! :>")
 
 
+# <----REMOVE----> Begin old text-only `hello`
 @commands.command(name="hello", aliases=["Hello", "HELLO"], help="Says hello back to you!")
 @commands.guild_only()
 async def hello_text(ctx: commands.Context):
@@ -570,6 +687,44 @@ async def stop(interaction: discord.Interaction):
     await interaction.response.send_message("All operations have been halted.", ephemeral=False)
 
 
+# --- Hybrid `shop` (works as both !shop and /shop) ---
+@commands.hybrid_command(name="shop", description="Browse and buy slaves with 💷 Kero", help="Browse and buy slaves with 💷 Kero\n**Syntax**: shop <asc|desc>")
+@app_commands.describe(order="Choose price sort order: Ascending or Descending")
+@app_commands.choices(order=[app_commands.Choice(name="Descending (highest first)", value="desc"), app_commands.Choice(name="Ascending (lowest first)",  value="asc")])
+async def shop_hybrid(ctx: commands.Context, order: app_commands.Choice[str] = None):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "shop"):
+        msg = "You are blocked from using `shop` command."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+
+    sort_order = order.value if order else "desc"
+    await ctx.defer()
+    top_slaves = await get_top_slaves(ctx, ctx.guild.id, sort_order)
+    non_bot_slaves = [
+        slave for slave in top_slaves
+        if not ctx.guild.get_member(slave[0]).bot
+    ]
+
+    if not non_bot_slaves:
+        embed = discord.Embed(
+            title="🌟 **The Grand Slave Market** 🌟",
+            description="No slaves are currently available for purchase. Please check back later!",
+            color=discord.Color.gold()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    per_page = 5
+    total_pages = (len(non_bot_slaves) - 1) // per_page + 1
+    view = ShopPaginationView(ctx, non_bot_slaves, per_page, total_pages)
+    embed = await view.create_embed()
+    view.message = await ctx.send(embed=embed, view=view)
+
+
+# <----REMOVE----> Begin old slash-only `shop`
 @app_commands.command(name="shop", description="Browse and buy slaves with 💷 Kero")
 @app_commands.describe(order="Choose price sort order: Ascending or Descending")
 @app_commands.choices(order=[app_commands.Choice(name="Descending (highest first)", value="desc"), app_commands.Choice(name="Ascending (lowest first)",  value="asc"),])
@@ -632,6 +787,55 @@ async def get_from_waifu_im(tag: str | None):
             _recent_waifu_im_pngs.pop(0)
     return url
 
+# --- Hybrid `waifu` (works as both !waifu and /waifu) ---
+@commands.hybrid_command(name="waifu", description="🖼️ Get a random waifu PNG by tag (SFW by default).", help="🖼️ Get a random waifu PNG by tag (SFW by default)\n**Syntax**: waifu maid")
+@app_commands.describe(tag="Optional tag (e.g. neko, maid).")
+@app_commands.choices(tag=[app_commands.Choice(name=t, value=t) for t in ALL_TAGS])
+async def waifu_hybrid(ctx: commands.Context, tag: str = None):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "waifu"):
+        msg = "You are blocked from using `waifu` command."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+    tag = tag.strip().lower() if tag else None
+    if tag and tag not in ALL_TAGS:
+        msg = f"Unknown tag `{tag}`. Use `!wtags` to see valid tags."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+    if tag in NSFW_TAGS and not ctx.channel.is_nsfw():
+        msg = "🔞 Can't pull NSFW images in here!"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+    url = await get_from_waifu_im(tag)
+    if not url:
+        msg = "Couldn't fetch a waifu for you 😕"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+    embed = discord.Embed(title=f"🔸 Waifu: {tag or 'Random'}", description=f"[Download here]({url})", color=discord.Color.random())
+    embed.set_image(url=url)
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+    try:
+        await ctx.send(embed=embed)
+    except Exception:
+        msg = "⚠️ Oops, something went wrong sending the embed."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+
+
+# <----REMOVE----> Begin old text-only `waifu`
 @commands.command(name="waifu", help="🖼️ Get a random waifu PNG by tag (SFW by default)\n**Syntax**: waifu maid")
 @commands.cooldown(1, 6, commands.BucketType.user)
 async def waifu(ctx, *, tag: str = None):
@@ -663,6 +867,7 @@ async def waifu(ctx, *, tag: str = None):
         await ctx.send("⚠️ Oops, something went wrong sending the embed.")
 
 
+# <----REMOVE----> Begin old text-only `waifu` error handler
 @waifu.error
 async def waifu_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
@@ -693,6 +898,7 @@ async def waifu_tags(ctx):
 
 
 
+# <----REMOVE----> Begin old slash-only `waifu`
 @app_commands.command(name="waifu", description="🖼️ Get a random waifu PNG by tag (SFW by default).")
 @app_commands.checks.cooldown(1, 6, key=lambda i: (i.user.id, "waifu"))
 @app_commands.describe(tag="Optional tag (e.g. neko, maid).")
@@ -717,6 +923,7 @@ async def waifu_slash(interaction: discord.Interaction, tag: str | None = None):
     embed.set_footer(text=f"Requested by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
+# <----REMOVE----> Begin old slash-only `waifu` error handler
 @waifu_slash.error
 async def waifu_slash_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.CommandOnCooldown):
@@ -828,6 +1035,115 @@ async def get_gifs(tag: str, nsfw: bool = False, pairing: str | None = None):
     return await fetch_gifukai(tag, pairing=pairing, nsfw=nsfw)
 
 
+# --- Hybrid GIF action factory (works as both !action and /action) ---
+
+def make_hybrid_action(action: str):
+    @commands.hybrid_command(name=action, aliases=GIFUKAI_ALIASES.get(action, []), description=f"Gives out a {action.capitalize()} GIF.", help=f"Gives out a {action.capitalize()} GIF.\n**Syntax**: {action} @user")
+    @commands.cooldown(1, 6, commands.BucketType.user)
+    async def _hybrid_cmd(ctx: commands.Context, member: str = None):
+        if await is_command_blocked(ctx.guild.id, ctx.author.id, action):
+            msg = f"You are blocked from using `{action}` command."
+            if ctx.interaction:
+                await ctx.send(msg, ephemeral=True)
+            else:
+                await ctx.reply(msg)
+            return
+
+        # Resolve the target member
+        target_member = None
+        selff = False
+
+        if ctx.interaction and member is not None and isinstance(member, discord.Member):
+            # Slash command: discord.py auto-converts the parameter
+            target_member = member
+        elif member and isinstance(member, str):
+            # Text command: parse string to member
+            try:
+                target_member = await commands.MemberConverter().convert(ctx, member)
+            except commands.MemberNotFound:
+                target_member = None
+
+            if not target_member and ctx.message and ctx.message.reference:
+                try:
+                    replied = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+                    target_member = replied.author
+                except Exception:
+                    pass
+
+            if not target_member:
+                matched_member, confidence = await utils.find_closest_member(ctx, member)
+                if matched_member and confidence > 70:
+                    target_member = matched_member
+                else:
+                    msg = f"Could not find a user matching '{member}'."
+                    if ctx.interaction:
+                        await ctx.send(msg, ephemeral=True)
+                    else:
+                        await ctx.reply(msg)
+                    return
+
+        if not target_member:
+            target_member = ctx.author
+
+        if target_member.id == ctx.author.id:
+            selff = True
+
+        url = await get_gifs(action)
+        if not url or not is_valid_url(url):
+            msg = f"❌ Couldn't fetch a {action} gif."
+            if ctx.interaction:
+                await ctx.send(msg, ephemeral=True)
+            else:
+                await ctx.reply(msg)
+            return
+
+        # Record and counts
+        await add_interaction(ctx.guild.id, ctx.author.id, target_member.id, action)
+        specific = await get_interaction_count(ctx.guild.id, ctx.author.id, target_member.id, action)
+        total = await get_per_user_activity_count(ctx.guild.id, ctx.author.id, action)
+
+        template = ACTION_TEMPLATES.get(action)
+        if template:
+            title = template["title"].format(
+                user=ctx.author.display_name,
+                target=target_member.display_name if not selff else "themselves")
+            footer = template["footer"].format(
+                user=ctx.author.display_name,
+                target=target_member.display_name if not selff else "themselves",
+                specific=specific,
+                total=total)
+        else:
+            title = f"{ctx.author.display_name} {action}s {target_member.display_name if not selff else 'themselves'}!"
+            footer = f"{action.capitalize()} Count: {total}  •  {target_member.display_name} received from you: {specific}"
+
+        emb = discord.Embed(title=title, color=discord.Color.random())
+        emb.set_image(url=url)
+        emb.set_footer(text=footer)
+        await ctx.send(embed=emb)
+
+    @_hybrid_cmd.error
+    async def _hybrid_on_cooldown(ctx, error):
+        if isinstance(error, commands.CommandOnCooldown):
+            msg = f"Slow down! Try again in {error.retry_after:.1f}s."
+            if ctx.interaction:
+                await ctx.send(msg, ephemeral=True)
+            else:
+                await ctx.reply(msg, delete_after=error.retry_after)
+        else:
+            msg = f"An unexpected error occurred: {error}"
+            if ctx.interaction:
+                await ctx.send(msg, ephemeral=True)
+            else:
+                await ctx.reply(msg)
+    _hybrid_cmd.__name__ = action
+    return _hybrid_cmd
+
+
+HIBRID_ACTION_COMMANDS = [make_hybrid_action(act) for act in ACTIONS]
+
+
+# <----REMOVE----> Begin old text-only GIF action factory
+
 def make_text_cmd(action: str):
     @commands.command(name=action, aliases=GIFUKAI_ALIASES.get(action, []), help=f"Gives out a {action.capitalize()} GIF.\n**Syntax**: {action} @user")
     @commands.cooldown(1, 6, commands.BucketType.user)
@@ -914,6 +1230,8 @@ for act in ACTIONS:
     make_text_cmd(act)
 
 
+# <----REMOVE----> Begin old slash-only GIF action factory
+
 def make_slash_action(cmd_name: str):
     @app_commands.command(name=cmd_name,description=f"Gives out a {cmd_name.capitalize()} GIF.")
     @app_commands.checks.cooldown(1, 6, key=lambda i: (i.user.id, cmd_name))
@@ -971,6 +1289,7 @@ def make_slash_action(cmd_name: str):
     return _action_cmd
 
 
+# <----REMOVE----> Old action command lists
 ACTION_COMMANDS = [make_text_cmd(act) for act in ACTIONS]
 
 SLASH_ACTION_COMMANDS = [make_slash_action(act) for act in ACTIONS]
@@ -978,25 +1297,34 @@ SLASH_ACTION_COMMANDS = [make_slash_action(act) for act in ACTIONS]
 
 def setup(bot: commands.Bot):
     bot.add_command(run_query)
-    bot.add_command(say_text)
-    bot.add_command(ping_text)
-    bot.add_command(echo_text)
-    bot.add_command(hello_text)
-    bot.add_command(waifu)
+    bot.add_command(say_hybrid)
+    bot.add_command(ping_hybrid)
+    bot.add_command(echo_hybrid)
+    bot.add_command(hello_hybrid)
+    bot.add_command(waifu_hybrid)
     bot.add_command(waifu_tags)
+    bot.add_command(shop_hybrid)
 
-    for cmd in ACTION_COMMANDS:
+    for cmd in HIBRID_ACTION_COMMANDS:
         bot.add_command(cmd)
 
-    bot.tree.add_command(say)
+    # <----REMOVE----> Old separate text/slash registrations
+    # bot.add_command(say_text)
+    # bot.add_command(ping_text)
+    # bot.add_command(echo_text)
+    # bot.add_command(hello_text)
+    # bot.add_command(waifu)
+    # for cmd in ACTION_COMMANDS:
+    #     bot.add_command(cmd)
+    # bot.tree.add_command(say)
+    # bot.tree.add_command(ping)
+    # bot.tree.add_command(hello)
+    # bot.tree.add_command(echo)
+    # bot.tree.add_command(shop_slash)
+    # bot.tree.add_command(waifu_slash)
+    # for cmd in SLASH_ACTION_COMMANDS:
+    #     bot.tree.add_command(cmd)
+
     bot.tree.add_command(toggle_spawn)
-    bot.tree.add_command(ping)
-    bot.tree.add_command(hello)
-    bot.tree.add_command(echo)
     bot.tree.add_command(spam)
     bot.tree.add_command(stop)
-    bot.tree.add_command(shop_slash)
-    bot.tree.add_command(waifu_slash)
-
-    for cmd in SLASH_ACTION_COMMANDS:
-        bot.tree.add_command(cmd)

@@ -122,6 +122,28 @@ allowed = AllowedMentions(
     users=True       # still allow direct @user pings if you want
 )
 
+# --- Hybrid `afk` (works as both !afk and /afk) ---
+@commands.hybrid_command(name="afk", aliases=['Afk', 'AFK'], description="Sets your AFK status.", help=f'Sets AFK of a user.\n**Syntax**: afk reason')
+@app_commands.describe(reason="The reason for going AFK.")
+async def afk_hybrid(ctx: commands.Context, *, reason: str = "AFK"):
+    user_id = ctx.author.id
+    guild_id = ctx.guild.id
+
+    if await is_command_blocked(guild_id, user_id, "afk"):
+        if ctx.interaction:
+            await ctx.send("You are blocked from using afk.", ephemeral=True)
+        else:
+            await ctx.reply("You are blocked from using afk.")
+        return
+
+    async with utils.db_pool.acquire() as cursor:
+        await cursor.execute('''INSERT INTO afk_users (user_id, guild_id, reason, start_time) VALUES ($1, $2, $3, $4) ON CONFLICT(user_id, guild_id) DO UPDATE SET reason = excluded.reason, start_time = excluded.start_time''', str(user_id), str(guild_id), reason, str(datetime.utcnow().isoformat()))
+
+    safe_mentions = AllowedMentions(users=True, roles=False, everyone=False)
+    await ctx.send(f"**{ctx.author.mention}** is now AFK: {reason}\n", allowed_mentions=safe_mentions)
+
+
+# <----REMOVE----> Begin old slash-only `afk`
 @bot.tree.command(name="afk", description="Sets your AFK status.")
 @app_commands.describe(reason="The reason for going AFK.")
 async def afk(interaction: discord.Interaction, reason: str = "AFK"):
@@ -144,6 +166,7 @@ async def afk(interaction: discord.Interaction, reason: str = "AFK"):
     await interaction.response.send_message(f"**{interaction.user.mention}** is now AFK: {reason}\n", allowed_mentions=safe_mentions)
 
 
+# <----REMOVE----> Begin old text-only `afk`
 @bot.command(name='afk', aliases=['Afk', 'AFK'], help=f'Sets AFK of a user.\n**Syntax**: afk reason')
 @commands.guild_only()
 async def afk(ctx, *, reason: str = "AFK"):
@@ -803,6 +826,76 @@ async def setup(interaction: discord.Interaction):
     await interaction.followup.send("Setup completed successfully!", ephemeral=False)
 
 
+# --- Hybrid `msgcount` (works as both !msgcount and /msgcount) ---
+@commands.hybrid_command(name="msgcount", aliases=['msg', 'messagecount', 'count', 'messages', 'message'], description="Retrieves the total message count of a user in the server.", help="Retrieves the total message count of the respective user in the server.\n**Syntax**: msgcount @user(s)")
+@app_commands.describe(user="Optional mention, ID, or username of the user to get the message count for.")
+async def msgcount_hybrid(ctx: commands.Context, user: str = None):
+    target_user = ctx.author
+    guild = ctx.guild
+
+    if await is_command_blocked(guild.id, ctx.author.id, "msgcount"):
+        if ctx.interaction:
+            await ctx.send("You are blocked from using msgcount.", ephemeral=True)
+        else:
+            await ctx.reply("You are blocked from using msgcount.")
+        return
+
+    user_arg = user
+    if user_arg:
+        target_user = None
+        try:
+            if user_arg.isdigit():
+                target_user = guild.get_member(int(user_arg)) or await bot.fetch_user(int(user_arg))
+            elif user_arg.startswith('<@') and user_arg.endswith('>'):
+                uid = int(user_arg.strip('<@!>'))
+                target_user = guild.get_member(uid) or await bot.fetch_user(uid)
+            else:
+                closest_member, confidence = await find_closest_member(ctx, user_arg)
+                if closest_member and confidence > 60:
+                    target_user = closest_member
+
+            if not target_user:
+                raise ValueError("Unable to resolve the user.")
+
+        except ValueError:
+            embed = discord.Embed(title="User Not Found",
+                description=f"Unable to resolve the user: `{user_arg}`. Please provide a valid mention, ID, or simply name.",
+                color=discord.Color.red())
+            if ctx.interaction:
+                await ctx.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.reply(embed=embed)
+            return
+
+    try:
+        async with utils.db_pool.acquire() as cursor:
+            message_count = await cursor.fetchval("SELECT message_count FROM message_counts WHERE user_id = $1 AND guild_id = $2", int(target_user.id), int(guild.id))
+            last_24h = await cursor.fetchval("""SELECT COALESCE(SUM(count), 0) FROM public.message_hourly_counts WHERE user_id = $1 AND guild_id = $2 AND hour_ts >= NOW() - INTERVAL '24 hours' """, int(target_user.id), int(guild.id))
+
+        if message_count is not None:
+            embed = discord.Embed(title="Message Count",
+                description=(f"**{target_user.display_name}** has sent a total of **{message_count}** messages in this server.\n"
+                f"**Last 24 Hours**: **{last_24h}** messages."),
+                color=discord.Color.dark_teal())
+        else:
+            embed = discord.Embed(title="No Message",
+                description=f"**{target_user.display_name}** has no recorded messages in this server.",
+                color=discord.Color.dark_teal())
+
+        if ctx.interaction:
+            await ctx.send(embed=embed)
+        else:
+            await ctx.reply(embed=embed)
+
+    except asyncpg.PostgresError as e:
+        if ctx.interaction:
+            await ctx.send("An error occurred while retrieving the message count.", ephemeral=True)
+        else:
+            await ctx.reply("An error occurred while retrieving message count.")
+        print(f"Database error: {e}")
+
+
+# <----REMOVE----> Begin old slash-only `msgcount`
 @bot.tree.command(name="msgcount", description="Retrieves the total message count of a user in the server.")
 @app_commands.describe(user="Optional mention, ID, or username of the user to get the message count for.")
 async def msgcount(interaction: discord.Interaction, user: str = None):
@@ -863,6 +956,7 @@ async def msgcount(interaction: discord.Interaction, user: str = None):
         print(f"Database error: {e}")
 
 
+# <----REMOVE----> Begin old text-only `msgcount`
 @bot.command(name="msgcount", aliases=['msg', 'messagecount', 'count', 'messages', 'message'],  help="Retrieves the total message count of the respective user in the server.\n**Syntax**: msgcount @user(s)")
 @commands.guild_only()
 async def messagecount(ctx, *, user_arg: str = None):
@@ -917,6 +1011,73 @@ async def messagecount(ctx, *, user_arg: str = None):
         print(f"Database error: {e}")
 
 
+# --- Hybrid `img` (works as both !img and /img) ---
+@commands.hybrid_command(name='img',
+             help=f'Displays the global avatar of the mentioned users or yourself if no one is mentioned.\n**Syntax**: img @user(s)')
+@commands.guild_only()
+async def img_hybrid(ctx: commands.Context, *, members: str = None):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "img"):
+        if ctx.interaction:
+            await ctx.send("You are blocked from using img.", ephemeral=True)
+        else:
+            await ctx.reply("You are blocked from using img.")
+        return
+
+    if not members:
+        embed = discord.Embed(title="Your Avatar", color=discord.Color.dark_teal())
+        embed.set_image(url=ctx.author.avatar.url)
+        await ctx.send(embed=embed)
+    else:
+        if ctx.interaction:
+            # Slash: batch all embeds into one response
+            member_inputs = members.split()
+            embeds = []
+            for member_input in member_inputs:
+                try:
+                    if member_input.startswith("<@") and member_input.endswith(">"):
+                        member_id = int(member_input[2:-1])
+                        member = ctx.guild.get_member(member_id)
+                    else:
+                        member = await ctx.guild.fetch_member(int(member_input))
+                    if member and member.avatar:
+                        embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
+                        embed.set_image(url=member.avatar.url)
+                        embeds.append(embed)
+                except ValueError:
+                    member, confidence = await find_closest_member(ctx, member_input)
+                    if member and confidence > 60:
+                        embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
+                        embed.set_image(url=member.avatar.url)
+                        embeds.append(embed)
+                    else:
+                        em = discord.Embed(title="Error",
+                            description=f"Could not find a member with input: **{member_input}**",
+                            color=discord.Color.red())
+                        embeds.append(em)
+            if embeds:
+                await ctx.send(embeds=embeds)
+        else:
+            # Text: send one at a time (original behavior)
+            for member_input in members.split():
+                try:
+                    member = await commands.MemberConverter().convert(ctx, member_input)
+                    if member and member.avatar:
+                        embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
+                        embed.set_image(url=member.avatar.url)
+                        await ctx.send(embed=embed)
+                except commands.BadArgument:
+                    member, confidence = await find_closest_member(ctx, member_input)
+                    if member and confidence > 60:
+                        embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
+                        embed.set_image(url=member.avatar.url)
+                        await ctx.send(embed=embed)
+                    else:
+                        await ctx.send(discord.Embed(title="Error",
+                            description=f"Could not find a member with input: **{member_input}**",
+                            color=discord.Color.red()))
+
+
+# <----REMOVE----> Begin old slash-only `img`
 @bot.tree.command(name="img",
                   description="Displays the global avatar of the mentioned users or yourself if no one is mentioned.")
 @app_commands.describe(members="To see Global image for a user or multiple users.")
@@ -965,6 +1126,7 @@ async def slash_image(interaction: discord.Interaction, members: str = None):
             await interaction.response.send_message(embeds=embeds)
 
 
+# <----REMOVE----> Begin old text-only `img`
 @bot.command(name='img',
              help=f'Displays the global avatar of the mentioned users or yourself if no one is mentioned.\n**Syntax**: img @user(s)')
 @commands.guild_only()
@@ -1042,6 +1204,84 @@ async def avatar(ctx, *members: str):
                 continue
 
 
+# --- Hybrid `bn` (works as both !bn and /bn) ---
+@commands.hybrid_command(name='bn', description="Displays the global banner of the mentioned users or yourself if no one is mentioned.", help='Displays the global banner of the mentioned users or yourself if no one is mentioned.\n**Syntax**: bn @user(s)')
+@commands.guild_only()
+@app_commands.describe(members="Mention users, IDs, or usernames separated by spaces")
+async def bn_hybrid(ctx: commands.Context, *, members: str = None):
+    if await is_command_blocked(ctx.guild.id, ctx.author.id, "bn"):
+        if ctx.interaction:
+            await ctx.send("You are blocked from using bn.", ephemeral=True)
+        else:
+            await ctx.reply("You are blocked from using bn.")
+        return
+
+    if members is None:
+        user = await bot.fetch_user(ctx.author.id)
+        if user.banner:
+            embed = discord.Embed(title="Your Banner", color=discord.Color.dark_teal())
+            embed.set_image(url=user.banner.url)
+            embed.add_field(name="Download Banner", value=f"[Click Here]({user.banner.url})", inline=False)
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("You don't have a banner.")
+        return
+
+    if ctx.interaction:
+        await ctx.defer()
+
+    member_inputs = members.split()
+    for member_input in member_inputs:
+        member_input = member_input.strip()
+        member_user = None
+        member_id = None
+
+        if member_input.startswith('<@') and member_input.endswith('>'):
+            member_id = int(member_input.replace('<@', '').replace('>', '').replace('!', ''))
+        elif member_input.isnumeric():
+            member_id = int(member_input)
+        else:
+            member_user, confidence = await find_closest_member(ctx, member_input)
+            if member_user and confidence > 60:
+                member_id = member_user.id
+            else:
+                err = discord.Embed(title="Error", description=f"Could not find a close match for: **{member_input}**.", color=discord.Color.red())
+                if ctx.interaction:
+                    await ctx.followup.send(embed=err)
+                else:
+                    await ctx.send(embed=err)
+                continue
+
+        if member_id is not None:
+            try:
+                member_user = await bot.fetch_user(member_id)
+            except discord.NotFound:
+                err = discord.Embed(title="Error", description=f"Could not find a user with ID: **{member_id}**.", color=discord.Color.red())
+                if ctx.interaction:
+                    await ctx.followup.send(embed=err)
+                else:
+                    await ctx.send(embed=err)
+                continue
+
+        if member_user and member_user.banner:
+            embed = discord.Embed(title=f"{member_user.display_name}'s Banner", color=discord.Color.dark_teal())
+            embed.set_image(url=member_user.banner.url)
+            embed.add_field(name="Download Banner", value=f"[Click Here]({member_user.banner.url})", inline=False)
+            if ctx.interaction:
+                await ctx.followup.send(embed=embed)
+            else:
+                await ctx.send(embed=embed)
+        else:
+            no_banner = discord.Embed(title="No Banner",
+                description=f"{member_user.display_name if member_user else member_input} does not have a banner set.",
+                color=discord.Color.red())
+            if ctx.interaction:
+                await ctx.followup.send(embed=no_banner)
+            else:
+                await ctx.send(embed=no_banner)
+
+
+# <----REMOVE----> Begin old text-only `bn`
 @bot.command(name='bn', help='Displays the global banner of the mentioned users or yourself if no one is mentioned.\n**Syntax**: bn @user(s)')
 @commands.guild_only()
 async def bn(ctx, *, members: str = None):
@@ -1111,6 +1351,7 @@ async def bn(ctx, *, members: str = None):
 
 
 
+# <----REMOVE----> Begin old slash-only `bn`
 @bot.tree.command(name="bn", description="Displays the global banner of the mentioned users or yourself if no one is mentioned.")
 @app_commands.describe(members="Mention users, IDs, or usernames separated by spaces")
 async def slash_bn(interaction: discord.Interaction, members: str = None):
@@ -1277,6 +1518,101 @@ async def self_prefix_error(ctx, error):
         await ctx.send(f"An unexpected error occurred: {error}")
 
 
+# --- Hybrid `setnick` (works as both !setnick and /setnick) ---
+@commands.hybrid_command(name="setnick",
+             help=f"Change the nickname of a given member to a desired one.\n**Syntax**: setnick @user new_nickname")
+@commands.guild_only()
+@commands.bot_has_permissions(manage_nicknames=True)
+@app_commands.describe(user="Mention, ID, or name of the user", new_nick="The new nickname to set")
+async def setnick_hybrid(ctx: commands.Context, user: str = None, *, new_nick: str = None):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "setnick"):
+        if ctx.interaction:
+            await ctx.send("You don't have permission to use this.", ephemeral=True)
+        return
+
+    if not user or not new_nick:
+        help_embed = discord.Embed(title="Setnick", description="Changes the nickname of a given member to a desired one.", color=discord.Color.dark_blue())
+        if ctx.interaction:
+            await ctx.send(embed=help_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=help_embed)
+        return
+
+    # Defer for slash to allow time for member resolution
+    if ctx.interaction:
+        await ctx.defer()
+
+    # Resolve user
+    member = None
+    if user.isdigit():
+        member = ctx.guild.get_member(int(user)) or await bot.fetch_user(int(user))
+    elif user.startswith('<@') and user.endswith('>'):
+        uid = int(user.strip('<@!>'))
+        member = ctx.guild.get_member(uid) or await bot.fetch_user(uid)
+    else:
+        closest_member, confidence = await find_closest_member(ctx, user)
+        if closest_member and confidence > 60:
+            member = closest_member
+
+    if not member or not isinstance(member, discord.Member):
+        err = discord.Embed(title="User Not Found",
+            description=f"Unable to resolve the user: `{user}`. Provide a valid mention, ID, or name.",
+            color=discord.Color.red())
+        if ctx.interaction:
+            await ctx.followup.send(embed=err)
+        else:
+            await ctx.send(embed=err)
+        return
+
+    if not await permissions_check_decorator(ctx, member, 'setnick'):
+        return
+
+    if member.top_role >= ctx.guild.me.top_role:
+        err = discord.Embed(title="Insufficient Permissions",
+            description="I cannot change the nickname of this user because they have a higher or equal role than me.",
+            color=discord.Color.red())
+        if ctx.interaction:
+            await ctx.followup.send(embed=err)
+        else:
+            await ctx.send(embed=err)
+        return
+
+    if len(new_nick) > 64:
+        msg = "Nickname cannot be longer than 64 characters."
+        if ctx.interaction:
+            await ctx.followup.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg)
+        return
+
+    original_name = member.display_name
+    errors = []
+
+    try:
+        await member.edit(nick=new_nick)
+        success = discord.Embed(title="Nickname Changed",
+            description=f"Nickname for {member.name} has been changed to `{new_nick}`.",
+            color=discord.Color.green())
+        if ctx.interaction:
+            await ctx.followup.send(embed=success)
+        else:
+            await ctx.send(embed=success)
+    except discord.Forbidden:
+        errors.append("I don't have permission to change this user's nickname.")
+    except discord.HTTPException:
+        errors.append("Failed to change the nickname due to a network error.")
+    except Exception as e:
+        errors.append(f"An unexpected error occurred: {e}")
+
+    if errors:
+        err_embed = discord.Embed(title="Error", description="\n".join(errors), color=discord.Color.red())
+        if ctx.interaction:
+            await ctx.followup.send(embed=err_embed)
+        else:
+            await ctx.send(embed=err_embed)
+
+
+# <----REMOVE----> Begin old text-only `setnick`
 @bot.command(name='setnick',
              help=f"Change the nickname of a given member to a desired one.\n**Syntax**: setnick @user new_nickname")
 @commands.guild_only()
@@ -1360,6 +1696,7 @@ async def set_nick_error(ctx, error):
         await ctx.send(embed=discord.Embed(title="Error", description="".join(er), color=discord.Color.red()))
 
 
+# <----REMOVE----> Begin old slash-only `setnick`
 @bot.tree.command(name="setnick", description="Change the nickname of a given member to a desired one.")
 @commands.guild_only()
 @commands.bot_has_permissions(manage_nicknames=True)
@@ -2049,6 +2386,103 @@ async def massban_date(interaction: discord.Interaction, day: int, month: int, y
 bot.tree.add_command(massban_group)
 
 
+# --- Hybrid `ban` (works as both !ban and /ban) ---
+@commands.hybrid_command(name="ban", description="Ban multiple or single users by their user IDs or mentions.",
+             help=f"Ban multiple or single users by their user IDs or mentions\n**Syntax**: ban @user(or user_ID) reason")
+@commands.guild_only()
+@commands.bot_has_permissions(ban_members=True)
+@app_commands.describe(target="The user to ban", reason="Reason for the ban")
+async def ban_hybrid(ctx: commands.Context, target: discord.Member = None, *, reason: str = "No reason provided"):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "ban"):
+        if ctx.interaction:
+            await ctx.send("You don't have permission to use this.", ephemeral=True)
+        return
+
+    guild = ctx.guild
+    dm_message = f"You have been banned from **{guild.name}**.\nHope you had a good time in there :)"
+
+    if ctx.interaction:
+        # Slash: target is a discord.Member, reason is a string
+        await ctx.defer()
+        members = [target] if target else []
+    else:
+        # Text: parse args to support multiple mentions/IDs + reason
+        args_text = getattr(ctx, '_hybrid_args', None) or getattr(ctx, 'args_raw', None)
+        # For hybrid text, the reason param contains everything after the target
+        # We need to parse differently: the target is already resolved by discord.py if it's a Mention
+        # But text users often type: ban @user1 @user2 reason here
+        # Keep it simple: just ban the target member
+        members = [target] if target else []
+
+    banned_users = []
+    users_already_banned = set()
+    error_messages = []
+
+    already_banned_users = set()
+    async for ban_entry in guild.bans():
+        already_banned_users.add(ban_entry.user.id)
+
+    for member in members:
+        if not await permissions_check_decorator(ctx, member, 'ban'):
+            continue
+
+        if member.id in already_banned_users:
+            users_already_banned.add(f"**{member.display_name}**")
+            continue
+
+        try:
+            await guild.ban(member, reason=reason)
+            try:
+                await member.send(embed=discord.Embed(
+                    title=f"You've been Banned by **{ctx.author.display_name}**",
+                    description=dm_message,
+                    color=discord.Color.random()
+                ))
+            except discord.Forbidden:
+                pass
+            banned_users.append(member)
+            await asyncio.sleep(0.2)
+        except discord.HTTPException:
+            error_messages.append(f"Failed to ban **{member.display_name}** due to an HTTP error.")
+        except Exception as e:
+            error_messages.append(f"Failed to ban **{member.display_name}** due to: {e}")
+
+    # Prepare responses
+    responses = []
+    if banned_users:
+        banned_names = ', '.join([u.display_name for u in banned_users])
+        embed = discord.Embed(title="Ban Successful",
+            description=f"The following users were banned:\n**{banned_names}**\nReason: **{reason if reason else 'No reason provided'}**",
+            color=discord.Color.green())
+        responses.append(embed)
+    if users_already_banned:
+        already = ', '.join(users_already_banned)
+        embed = discord.Embed(title="Users Already Banned",
+            description=f"The following users are already banned:\n**{already}**",
+            color=discord.Color.blue())
+        responses.append(embed)
+    if error_messages:
+        embed = discord.Embed(title="Errors encountered",
+            description="\n".join(error_messages),
+            color=discord.Color.red())
+        responses.append(embed)
+
+    if responses:
+        if ctx.interaction:
+            await ctx.followup.send(embed=responses[0])
+            for embed in responses[1:]:
+                await ctx.followup.send(embed=embed)
+        else:
+            for embed in responses:
+                await ctx.send(embed=embed)
+    else:
+        if ctx.interaction:
+            await ctx.send("No users were banned.", ephemeral=True)
+        else:
+            await ctx.send("No users were banned.")
+
+
+# <----REMOVE----> Begin old text-only `ban`
 @bot.command(name="ban",
              help=f"Ban multiple or single users by their user IDs or mentions\n**Syntax**: ban @user(or user_ID) reason")
 @commands.guild_only()
@@ -2160,6 +2594,7 @@ async def ban_error(ctx, error):
         await ctx.send(f"An unexpected error occurred: {error}")
 
 
+# <----REMOVE----> Begin old slash-only `ban`
 @bot.tree.command(name="ban", description="Ban multiple or single users by their user IDs or mentions.")
 async def bann(interaction: discord.Interaction, target: discord.Member, reason: str = "No reason provided"):
     if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "ban"):
@@ -2294,6 +2729,82 @@ async def massunban_all(interaction: discord.Interaction):
 bot.tree.add_command(massunban_group)
 
 
+# --- Hybrid `unban` (works as both !unban and /unban) ---
+@commands.hybrid_command(name="unban", description="Unban a user by their id or mention.",
+             help=f"Unban multiple or single users by their IDs and mentions or unban all.\n**Syntax**: unban user_ID(or mention)")
+@commands.guild_only()
+@commands.bot_has_permissions(ban_members=True)
+@app_commands.describe(member="The user to unban (ID or mention)", reason="Reason for the unban")
+async def unban_hybrid(ctx: commands.Context, member: str = None, *, reason: str = "No reason provided"):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "unban"):
+        if ctx.interaction:
+            await ctx.send("You don't have permission to use this.", ephemeral=True)
+        return
+
+    guild = ctx.guild
+
+    if not member:
+        help_embed = discord.Embed(title="Unban",
+            description="Unbans a given user or multiple users based on their user id.\n**Syntax**: `unban user_ID or mention`.",
+            color=discord.Color.dark_blue())
+        if ctx.interaction:
+            await ctx.send(embed=help_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=help_embed)
+        return
+
+    # Resolve target user
+    target = None
+    if member.isdigit():
+        try:
+            target = await bot.fetch_user(int(member))
+        except Exception:
+            target = None
+    elif member.startswith("<@") and member.endswith(">"):
+        cleaned = member.strip("<@!>")
+        if cleaned.isdigit():
+            try:
+                target = await bot.fetch_user(int(cleaned))
+            except Exception:
+                target = None
+
+    if not target:
+        if ctx.interaction:
+            await ctx.send(f"Could not resolve user: `{member}`", ephemeral=True)
+        else:
+            await ctx.send(f"Could not resolve user: `{member}`")
+        return
+
+    try:
+        await guild.unban(target)
+        embed = discord.Embed(title="Unban Successful",
+            description=f"Successfully unbanned **{target.display_name}** (ID: **{target.id}**) with reason: **{reason}**",
+            color=discord.Color.green())
+        if ctx.interaction:
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(embed=embed)
+    except discord.NotFound:
+        msg = f"User **{target.display_name}** (ID: **{target.id}**) is not banned."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+    except discord.Forbidden:
+        msg = f"I don't have permission to unban **{target.display_name}** (ID: **{target.id}**)."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+    except Exception as e:
+        msg = f"Failed to unban **{target.display_name}** (ID: **{target.id}**) - *{e}*"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+
+
+# <----REMOVE----> Begin old text-only `unban`
 @bot.command(name="unban",
              help=f"Unban multiple or single users by their IDs and mentions or unban all.\n**Syntax**: unban user_ID(or mention)")
 @commands.guild_only()
@@ -2378,6 +2889,7 @@ async def unban_error(ctx, error):
         await ctx.send(f"An unexpected error occurred: {error}")
 
 
+# <----REMOVE----> Begin old slash-only `unban`
 @bot.tree.command(name="unban", description="Unban a user by their id or mention.")
 async def unban(interaction: discord.Interaction, member: str, reason: str = "No reason provided"):
     if not await is_authorized_or_not(interaction, interaction.guild.id, interaction.user.id, "unban"):
@@ -2640,6 +3152,138 @@ async def steal_sticker_error(ctx, error):
         await ctx.send(embed=errEmbd)
 
 
+# --- Hybrid `roleroulette` (works as both !roleroulette and /role_roulette) ---
+@commands.hybrid_command(name="roleroulette", description="Temporarily assigns a random role to a user for a set period",
+             help="Temporarily assigns a random role to a user for a set period\n**Syntax**: roleroulette @user(or user_ID) time")
+@commands.guild_only()
+@commands.bot_has_permissions(manage_roles=True)
+@app_commands.describe(
+    member_input="Mention or ID of the user to assign a random role",
+    time="Duration for which the role will be assigned (e.g., 2m, 1h)")
+@app_commands.autocomplete(member_input=memname_choice)
+async def role_roulette_hybrid(ctx: commands.Context, member_input: str, time_arg: str = '2m'):
+    if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "roleroulette"):
+        if ctx.interaction:
+            await ctx.send("You don't have permission to use this.", ephemeral=True)
+        return
+
+    guild = ctx.guild
+
+    # Resolve member
+    member = None
+    if ctx.interaction and isinstance(member_input, discord.Member):
+        member = member_input
+    else:
+        try:
+            member = await commands.MemberConverter().convert(ctx, member_input)
+        except commands.BadArgument:
+            matched_member, confidence = await find_closest_member(ctx, member_input)
+            if matched_member and confidence > 60:
+                member = matched_member
+            else:
+                msg = "Could not find a member matching: **{member_input}**"
+                if ctx.interaction:
+                    await ctx.send(msg, ephemeral=True)
+                else:
+                    await ctx.send(discord.Embed(title="Error", description=msg, color=discord.Color.red()))
+                return
+
+    if not await permissions_check_decorator(ctx, member, 'roleroulette'):
+        return
+
+    available_roles = [role for role in guild.roles if
+                       not role.managed and role not in member.roles and role < guild.me.top_role]
+
+    if not available_roles:
+        msg = "There are no eligible roles left to assign to this user."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+        return
+
+    random_role = random.choice(available_roles)
+
+    limits = {'s': 60, 'm': 60, 'h': 24, 'd': 28}
+
+    duration_unit = next((arg for arg in time_arg.split() if len(arg) > 1 and arg[:-1].isdigit() and arg[-1] in "smhd"),
+                         "2m")
+
+    if len(duration_unit) < 2 or not duration_unit[:-1].isdigit() or duration_unit[-1] not in "smhd":
+        error_embed = discord.Embed(title="Error",
+            description="Invalid time format! Use something like `10s`, `5m`, `2h`, etc.",
+            color=discord.Color.red())
+        if ctx.interaction:
+            await ctx.send(embed=error_embed, ephemeral=True)
+        else:
+            await ctx.send(embed=error_embed)
+        return
+
+    amount = int(duration_unit[:-1])
+    unit = duration_unit[-1]
+
+    if amount > limits[unit]:
+        msg = f"The maximum allowed {unit} is {limits[unit]}."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.reply(msg, ephemeral=True)
+        return
+
+    time_in_seconds = convert_to_seconds(amount, unit)
+
+    # If member already has an active timer, remove their existing role first
+    if member.id in active_role_timers:
+        role_data = active_role_timers.get(member.id)
+        if role_data:
+            existing_task = role_data.get("task")
+            if existing_task:
+                existing_task.cancel()
+            existing_role_id = role_data.get("role_id")
+            existing_role = guild.get_role(existing_role_id)
+            if existing_role:
+                try:
+                    await member.remove_roles(existing_role)
+                except discord.HTTPException:
+                    pass
+        active_role_timers.pop(member.id, None)
+
+    try:
+        await member.add_roles(random_role)
+        embed = discord.Embed(
+            title="Role Roulette 🎲",
+            description=f"{random_role.mention} has been assigned to **{member.display_name}** for **{amount}{unit}**!",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+
+        active_role_timers[member.id] = {
+            "role_id": random_role.id,
+            "channel_id": ctx.channel.id,
+            "task": asyncio.create_task(remove_role_after_time(ctx, member, random_role, time_in_seconds))
+        }
+
+    except discord.Forbidden:
+        msg = f"I can't assign that role to {member.display_name} for some reason."
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+    except discord.HTTPException as e:
+        msg = f"Failed to assign the role due to: {str(e)}"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+    except Exception as e:
+        msg = f"An unexpected error occurred: {str(e)}"
+        if ctx.interaction:
+            await ctx.send(msg, ephemeral=True)
+        else:
+            await ctx.send(msg)
+
+
+# <----REMOVE----> Begin old text-only `roleroulette`
 @bot.command(name="roleroulette",
              help="Temporarily assigns a random role to a user for a set period\n**Syntax**: roleroulette @user(or user_ID) time")
 @commands.guild_only()
@@ -2742,6 +3386,7 @@ async def role_roulette(ctx, member_input: str, time_arg: str = '2m'):
         return await ctx.send(f"An unexpected error occurred: {str(e)}")
 
 
+# <----REMOVE----> Begin old slash-only `role_roulette`
 @bot.tree.command(name="role_roulette", description="Temporarily assigns a random role to a user for a set period")
 @app_commands.describe(
     member_input="Mention or ID of the user to assign a random role",
@@ -3895,6 +4540,7 @@ async def debug_list_slaves(ctx):
 
 
 
+# <----REMOVE----> Begin old text-only `shop` (replaced by hybrid in Secondary)
 @bot.command(name='shop',
              help=f"An interactive shop that will give bring you various items you can buy with 💷 Kero.\n**Syntax**: shop [asc|desc]")
 async def shop(ctx, order: str = "desc"):
@@ -7727,6 +8373,12 @@ async def main():
         await bot.load_extension("ai_cog")
         await bot.add_cog(permission_system.PermissionsCog(bot, lambda: utils.db_pool))
         Slickey_Secondary_.setup(bot)
+
+        # Register hybrid commands from Main
+        for hybrid_cmd in [afk_hybrid, msgcount_hybrid, img_hybrid, bn_hybrid,
+                           setnick_hybrid, ban_hybrid, unban_hybrid, role_roulette_hybrid]:
+            bot.add_command(hybrid_cmd)
+
         await bot.start(bada_wigu_bot_token)
 
 asyncio.run(main())
