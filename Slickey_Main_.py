@@ -2206,7 +2206,7 @@ async def purge_reaction_error(ctx, error):
              help="Temporarily assigns a random role to a user for a set period\n**Syntax**: roleroulette @user(or user_ID) time")
 @commands.guild_only()
 @commands.bot_has_permissions(manage_roles=True)
-@app_commands.describe(member_input="Mention or ID of the user to assign a random role", time="Duration for which the role will be assigned (e.g., 2m, 1h)")
+@app_commands.describe(member_input="Mention or ID of the user to assign a random role", time_arg="Duration for which the role will be assigned (e.g., 2m, 1h)")
 @app_commands.autocomplete(member_input=memname_choice)
 async def role_roulette_hybrid(ctx: commands.Context, member_input: str, time_arg: str = '2m'):
     if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "roleroulette"):
