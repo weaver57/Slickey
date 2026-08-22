@@ -238,15 +238,15 @@ PERMISSION_DEFINITIONS_BY_KEY = {definition.key: definition for definition in BU
 # Presets are deliberately small and editable after creation.  Administrator
 # means administrator of Slickey, not Discord's native Administrator bit.
 ROLE_PRESETS: dict[str, dict[str, Any]] = {
-    "administrator": {"name": "Administrator", "description": "Full Slickey administration", "rank": 100,
+    "administrator": {"name": "Administrator", "description": "Full Slickey administration", "rank": 50,
                       "permissions": ("command.*",)},
-    "moderator": {"name": "Moderator", "description": "Standard moderation tools", "rank": 50,
+    "moderator": {"name": "Moderator", "description": "Standard moderation tools", "rank": 40,
                   "permissions": ("category.moderation", "command.dashboard")},
-    "trial_moderator": {"name": "Trial Moderator", "description": "Limited moderation tools", "rank": 20,
+    "trial_moderator": {"name": "Trial Moderator", "description": "Limited moderation tools", "rank": 30,
                          "permissions": ("command.mute", "command.unmute", "command.purge")},
-    "event_manager": {"name": "Event Manager", "description": "Event and game tools", "rank": 30,
+    "event_manager": {"name": "Event Manager", "description": "Event and game tools", "rank": 20,
                       "permissions": ("command.dashboard",)},
-    "economy_manager": {"name": "Economy Manager", "description": "Economy-management tools", "rank": 30,
+    "economy_manager": {"name": "Economy Manager", "description": "Economy-management tools", "rank": 10,
                         "permissions": ("category.economy", "command.dashboard")},
 }
 
