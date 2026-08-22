@@ -51,21 +51,10 @@ async def get_prefix(bot, message):
 
 
     async with utils.db_pool.acquire(timeout=5.0) as conn:
-        user_prefix = await conn.fetchrow("SELECT prefix FROM user_prefixes WHERE user_id = $1", user_id)
-        if user_prefix:
-            #prefix_cache[key] = user_prefix["prefix"]
-            #print("Inserted cached memory here.")
-            return user_prefix["prefix"]
-
         guild_prefix = await conn.fetchrow("SELECT prefix FROM server_prefixes WHERE guild_id = $1", guild_id)
         if guild_prefix:
-            #prefix_cache[key] = guild_prefix["prefix"]
-            #print("Inserted cached memory here.")
             return guild_prefix["prefix"]
 
-    
-    #prefix_cache[key] = "w."
-    #print("Inserted cached memory here.")
     return "w."
 
 async def resolve_prefix(guild_id: int | None, user_id: int) -> str:
@@ -76,9 +65,6 @@ async def resolve_prefix(guild_id: int | None, user_id: int) -> str:
         return "w."
     try:
         async with utils.db_pool.acquire(timeout=5.0) as conn:
-            user_prefix = await conn.fetchrow("SELECT prefix FROM user_prefixes WHERE user_id = $1", str(user_id))
-            if user_prefix:
-                return user_prefix["prefix"]
             guild_prefix = await conn.fetchrow("SELECT prefix FROM server_prefixes WHERE guild_id = $1", str(guild_id))
             if guild_prefix:
                 return guild_prefix["prefix"]
@@ -96,7 +82,7 @@ permission_system.install(bot, lambda: utils.db_pool)
 
 async def block_or_command_autocomplete(interaction: discord.Interaction, current: str):
     permission_type = interaction.namespace.permission_type
-    block_choices = ["yazy", "memory","colorwars", "say", "spam", "ping", "hello", "buckshot", "selfprefix", "echo", "av", "img", "afk", "msgcount", "bn", "setprefix", "setnick", "mute", "unmute", "ban", "unban", "purgereaction", "roleroulette", "showperm", "setperm", "role", "setrole", "whois", "modlogs", "purge", "leaderboard", "cf", "diceroll", "wish", "jackpot", "help", "shinecrown", "fanmaster", "minerock", "fetchwater", "bakebread", "trade", "slrefund", "slrelease", "escape", "tribute", "tip", "slinfo", "slshow", "slbuy", "shop", "buycmd", "beg", "daily", "give", "slwhip", "slrole", "slkick", "slsetnick", "sljail", "slunmute", "slmute", "slunjail", "wallet", "chkprice", 'waifu', 'wtags'] + ACTIONS
+    block_choices = ["yazy", "memory","colorwars", "say", "spam", "ping", "hello", "buckshot", "echo", "av", "img", "afk", "msgcount", "bn", "setprefix", "setnick", "mute", "unmute", "ban", "unban", "purgereaction", "roleroulette", "showperm", "setperm", "role", "setrole", "whois", "modlogs", "purge", "leaderboard", "cf", "diceroll", "wish", "jackpot", "help", "shinecrown", "fanmaster", "minerock", "fetchwater", "bakebread", "trade", "slrefund", "slrelease", "escape", "tribute", "tip", "slinfo", "slshow", "slbuy", "shop", "buycmd", "beg", "daily", "give", "slwhip", "slrole", "slkick", "slsetnick", "sljail", "slunmute", "slmute", "slunjail", "wallet", "chkprice", 'waifu', 'wtags'] + ACTIONS
     
     command_choices = ["say", "spam", "echo", "setnick", "mute", "unmute", "ban", "unban", "role", "purgereaction",
                        "roleroulette", "setperm", "setrole", "whois", "modlogs"]
@@ -175,14 +161,12 @@ async def on_message(message):
 
     if bot.user.mentioned_in(message) and not message.mention_everyone and not message.reference:
 
-        # Prefixes Logic
+        # Prefix Logic
         async with utils.db_pool.acquire() as conn:
-            user_prefix_row = await conn.fetchrow("SELECT prefix FROM user_prefixes WHERE user_id = $1", user_id)
             guild_prefix_row = await conn.fetchrow("SELECT prefix FROM server_prefixes WHERE guild_id = $1", guild_id)
 
         embed = discord.Embed(title="Bot Prefix Information", color=discord.Color.blue())
         embed.add_field(name="Server Prefix", value=guild_prefix_row["prefix"] if guild_prefix_row else "w. (default)", inline=False)
-        embed.add_field(name="Your Personal Prefix", value=user_prefix_row["prefix"] if user_prefix_row else "None", inline=False)
 
         await message.channel.send(embed=embed)
 
@@ -1089,52 +1073,6 @@ async def set_prefix_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(embed=discord.Embed(title="Set Prefix",
                                            description="Changes the prefix of this bot. Syntax: `setprefix new_prefix`",
-                                           color=discord.Color.dark_blue()))
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send("The prefix must be a string.")
-    elif isinstance(error, commands.CommandInvokeError):
-        await ctx.send(f"An error occurred while invoking the command: {error}")
-    else:
-        await ctx.send(f"An unexpected error occurred: {error}")
-
-
-@bot.command(name='selfprefix',
-             help='Set your own prefix for this server.\n**Syntax**: selfprefix new_prefix or type "delete" for deleting the self-prefix')
-@commands.guild_only()
-async def self_prefix(ctx, new_prefix: str):
-    if await is_command_blocked(ctx.guild.id, ctx.author.id, "selfprefix"):
-        await ctx.reply("You are blocked from using selfprefix command.")
-        return
-    
-    guild_id = str(ctx.guild.id)
-    user_id  = str(ctx.author.id)
-
-    async with utils.db_pool.acquire() as conn:
-        if new_prefix.lower() == "delete" or new_prefix.lower() == "del":
-            await conn.execute("DELETE FROM user_prefixes WHERE user_id = $1", str(ctx.author.id))
-            await ctx.send(embed=discord.Embed(title="Self-Prefix Disabled",
-                                               description="Your self-prefix has been disabled globally.",
-                                               color=discord.Color.green()))
-            return
-
-        if len(new_prefix) > 5:
-            await ctx.send("Prefix cannot be longer than 5 characters.")
-            return
-
-        await conn.execute("INSERT INTO user_prefixes (user_id, prefix) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET prefix = EXCLUDED.prefix", str(ctx.author.id), new_prefix)
-        await ctx.send(embed=discord.Embed(title="Self-Prefix Set",
-                                           description=f"Your self-prefix has been set to: **{new_prefix}**",
-                                           color=discord.Color.green()))
-        
-        #_evict_prefix_cache_for_user(guild_id, user_id)
-        #print("Removed the cached memory of this user's prefix.")
-
-
-@self_prefix.error
-async def self_prefix_error(ctx, error):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=discord.Embed(title="Self Prefix",
-                                           description="Changes your personal prefix for yourself across the bot.\n\n**Syntax**: `selfprefix new_prefix`",
                                            color=discord.Color.dark_blue()))
     elif isinstance(error, commands.BadArgument):
         await ctx.send("The prefix must be a string.")

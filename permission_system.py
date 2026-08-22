@@ -42,7 +42,7 @@ class PermissionDecision:
 COMMAND_REGISTRY: dict[str, tuple[str, str]] = {
     # Permission and server configuration
     **{name: ("configuration", "protected") for name in (
-        "permissions", "dashboard", "setup", "setprefix", "selfprefix", "setperm", "showperm", "spawn",
+        "permissions", "dashboard", "setup", "setprefix", "setperm", "showperm", "spawn",
     )},
     # Moderation and actions that affect another member or Discord role
     **{name: ("moderation", "protected") for name in (
