@@ -1,0 +1,191 @@
+/* ── App shell layout ── */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  min-height: 100vh;
+  min-width: 0;
+  transition: grid-template-columns .25s var(--ease);
+}
+.app.collapsed { grid-template-columns: var(--sidebar-w-collapsed) 1fr; }
+
+/* ── Sidebar ── */
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s5) var(--s4);
+  border-right: 1px solid var(--border);
+  background: var(--bg-subtle);
+  position: relative;
+  z-index: 20;
+  transition: width .25s var(--ease), padding .25s var(--ease), transform .25s var(--ease);
+}
+
+.aside-top {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: auto;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-style: italic;
+  font-weight: 600;
+  letter-spacing: -.3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.identity { font-size: var(--font-size-xs); color: var(--ink-muted); }
+.identity b { color: var(--ink); }
+
+/* ── Sidebar nav ── */
+nav {
+  display: grid;
+  gap: 2px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: var(--font-size-base);
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
+  min-height: 38px;
+}
+
+.nav:hover { color: var(--ink); background: var(--card-hover); }
+.nav.active {
+  color: var(--card);
+  background: var(--ink);
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.nav-icon { flex-shrink: 0; }
+
+.app.collapsed .nav { justify-content: center; padding: 10px; }
+.app.collapsed .aside-top { flex-direction: column; gap: var(--s2); }
+.app.collapsed .brand { margin-right: 0; }
+
+.aside-note {
+  margin-top: auto;
+  font-size: var(--font-size-xs);
+  line-height: 1.55;
+  color: var(--ink-muted);
+}
+
+/* ── Sidebar controls ── */
+.rail-toggle, .theme-toggle, .mobile-close, .mobile-hamburger {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink-soft);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration), color var(--duration), border-color var(--duration);
+}
+.rail-toggle:hover, .theme-toggle:hover, .mobile-hamburger:hover {
+  background: var(--accent);
+  color: var(--card);
+  border-color: var(--accent);
+}
+.mobile-close { display: none; }
+
+/* ── Brand mark ── */
+.mark {
+  display: grid;
+  place-items: center;
+  margin: auto;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--card);
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-style: italic;
+  font-weight: 700;
+  box-shadow: var(--shadow-md);
+}
+.mark.pulse { animation: 1.6s ease-in-out infinite pulse; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.mark.small {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  margin: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Main content ── */
+main {
+  width: 100%;
+  max-width: 1400px;
+  padding: var(--s8) 5vw;
+  margin: auto;
+  min-width: 0;
+  overflow-x: hidden;
+  position: relative;
+  z-index: 2;
+}
+
+.mobile-hamburger {
+  display: none;
+  margin-bottom: var(--s5);
+}
+
+.backdrop {
+  display: none;
+}
+
+/* ── Login page ── */
+.login {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 20px;
+  text-align: center;
+  gap: var(--s3);
+  position: relative;
+}
+
+.login-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%);
+}
+
+.login .mark { margin-bottom: 10px; }
+.login h1 { margin: 0; font-size: clamp(24px, 6vw, 34px); }
+.login p { color: var(--ink-muted); max-width: 360px; margin: 0 0 10px; line-height: 1.6; }
+.login button { min-width: 220px; }
+
+/* ── Header ── */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s5);
+  padding-bottom: var(--s5);
+  margin-bottom: var(--s7);
+  border-bottom: 1px solid var(--border);
+}

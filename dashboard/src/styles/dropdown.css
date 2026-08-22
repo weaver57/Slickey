@@ -1,0 +1,79 @@
+/* ── Dropdown component ── */
+.dd {
+  position: relative;
+  width: 100%;
+}
+
+.dd-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: 10px 12px;
+  font-weight: 500;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color var(--duration);
+  box-shadow: var(--shadow-sm);
+}
+
+.dd-trigger:hover { border-color: var(--accent); }
+.dd-trigger.open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dd-trigger.placeholder { color: var(--ink-muted); font-weight: 400; }
+
+.dd-chevron {
+  width: 11px;
+  height: 7px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+  transition: transform var(--duration) var(--ease);
+}
+.dd-trigger.open .dd-chevron { transform: rotate(180deg); }
+
+.dd-disabled .dd-trigger { opacity: .45; cursor: not-allowed; }
+
+.dd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  animation: ddIn .15s var(--ease);
+}
+
+@keyframes ddIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.dd-search {
+  width: calc(100% - 8px);
+  margin: 4px;
+  box-sizing: border-box;
+}
+
+.dd-option {
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  transition: background .1s;
+}
+
+.dd-option:hover { background: var(--bg-subtle); color: var(--ink); }
+.dd-option.active { background: var(--ink); color: var(--card); font-weight: 600; }
+.dd-empty { color: var(--ink-muted); cursor: default; }
+.dd-empty:hover { background: transparent; }
