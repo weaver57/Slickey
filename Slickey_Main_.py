@@ -895,82 +895,6 @@ async def msgcount_hybrid(ctx: commands.Context, user: str = None):
         print(f"Database error: {e}")
 
 
-
-# --- Hybrid `img` (works as both !img and /img) ---
-# <---------REMOVE---------> Old `img` (now merged into `av_hybrid`)
-# @commands.hybrid_command(name='img',
-#              help=f'Displays the global avatar of the mentioned users or yourself if no one is mentioned.\n**Syntax**: img @user(s)')
-# @commands.guild_only()
-# async def img_hybrid(ctx: commands.Context, *, members: str = None):
-#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "img"):
-#         if ctx.interaction:
-#             await ctx.send("You are blocked from using img.", ephemeral=True)
-#         else:
-#             await ctx.reply("You are blocked from using img.")
-    # return
-
-    # if not members:
-    #     embed = discord.Embed(title="Your Avatar", color=discord.Color.dark_teal())
-    #     embed.set_image(url=ctx.author.avatar.url)
-    #     await ctx.send(embed=embed)
-    # else:
-    #     if ctx.interaction:
-    #         member_inputs = members.split()
-    #         embeds = []
-    #         for member_input in member_inputs:
-    #             try:
-    #                 if member_input.startswith("<@") and member_input.endswith(">"):
-    #                     member_id = int(member_input[2:-1])
-    #                     member = ctx.guild.get_member(member_id)
-    #                 else:
-    #                     member = await ctx.guild.fetch_member(int(member_input))
-    #                 if member and member.avatar:
-    #                     embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
-    #                     embed.set_image(url=member.avatar.url)
-    #                     embeds.append(embed)
-    #             except ValueError:
-    #                 member, confidence = await find_closest_member(ctx, member_input)
-    #                 if member and confidence > 60:
-    #                     embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
-    #                     embed.set_image(url=member.avatar.url)
-    #                     embeds.append(embed)
-    #                 else:
-    #                     em = discord.Embed(title="Error",
-    #                         description=f"Could not find a member with input: **{member_input}**",
-    #                         color=discord.Color.red())
-    #                     embeds.append(em)
-    #         if embeds:
-    #             await ctx.send(embeds=embeds)
-    #     else:
-    #         for member_input in members.split():
-    #             try:
-    #                 member = await commands.MemberConverter().convert(ctx, member_input)
-    #                 if member and member.avatar:
-    #                     embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
-    #                     embed.set_image(url=member.avatar.url)
-    #                     await ctx.send(embed=embed)
-    #             except commands.BadArgument:
-    #                 member, confidence = await find_closest_member(ctx, member_input)
-    #                 if member and confidence > 60:
-    #                     embed = discord.Embed(title=f"**{member.display_name}'s** Avatar", color=discord.Color.dark_teal())
-    #                     embed.set_image(url=member.avatar.url)
-    #                     await ctx.send(embed=embed)
-    #                 else:
-    #                     await ctx.send(discord.Embed(title="Error",
-    #                         description=f"Could not find a member with input: **{member_input}**",
-    #                         color=discord.Color.red()))
-
-
-
-# <---------REMOVE---------> Old text-only `av` (now merged into `av_hybrid`)
-# @bot.command(name='av',
-#              help=f'Displays the server specific avatar of the mentioned users in the server or yourself if no one is mentioned.\n**Syntax**: av @user(s)')
-# @commands.guild_only()
-# async def avatar(ctx, *members: str):
-#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "av"):
-#         await ctx.reply("You are blocked from using av.")
-#         return
-
 # --- Toggle button for switching between Global and Server Avatar ---
 class AvatarToggleView(View):
     def __init__(self, author, target_member):
@@ -1045,34 +969,6 @@ async def av_hybrid(ctx: commands.Context, *, members: str = None):
             await ctx.followup.send(embed=view._make_embed(), view=view)
         else:
             await ctx.send(embed=view._make_embed(), view=view)
-
-# <---------REMOVE---------> Old `av` body (merged into av_hybrid above)
-#     if not members:
-#         embed = discord.Embed(title="Your Server Avatar", color=discord.Color.dark_teal())
-#         embed.set_image(url=ctx.author.display_avatar.url)
-#         await ctx.send(embed=embed)
-#     else:
-#         for member_input in members:
-#             try:
-#                 member = await commands.MemberConverter().convert(ctx, member_input)
-#                 if member and member.avatar:
-#                     embed = discord.Embed(title=f"**{member.display_name}'s** Server Avatar",
-#                                           color=discord.Color.dark_teal())
-#                     embed.set_image(url=member.display_avatar.url)
-#                     await ctx.send(embed=embed)
-#             except commands.BadArgument:
-#                 member, confidence = await find_closest_member(ctx, member_input)
-#                 if member and confidence > 60:
-#                     embed = discord.Embed(title=f"**{member.display_name}'s** Server Avatar",
-#                                           color=discord.Color.dark_teal())
-#                     embed.set_image(url=member.display_avatar.url)
-#                     await ctx.send(embed=embed)
-#                 else:
-#                     await ctx.send(discord.Embed(title="Error",
-#                         description=f"Could not find a member with input: **{member_input}**",
-#                         color=discord.Color.red()))
-#                 continue
-
 
 # --- Hybrid `bn` (works as both !bn and /bn) ---
 @commands.hybrid_command(name='bn', description="Displays the global banner of the mentioned users or yourself if no one is mentioned.", help='Displays the global banner of the mentioned users or yourself if no one is mentioned.\n**Syntax**: bn @user(s)')
@@ -2304,108 +2200,6 @@ async def purge_reaction_error(ctx, error):
         await ctx.send(embed=errEmbd)
 
 
-# <---------REMOVE---------> stealsticker command and error handler below (removed entirely)
-# @bot.command(name="stealsticker", help=f"Steals a sticker from a message.\n**Syntax**: steal_sticker message_ID")
-# @commands.bot_has_permissions(manage_emojis=True)
-# async def steal_sticker(ctx, message_id: str, sticker_name: str = None):
-#     if not await is_authorized_or_not(ctx, ctx.guild.id, ctx.author.id, "stealsticker"):
-#         return
-
-    guild = ctx.guild
-
-    # Validate message_id
-    if not message_id.isdigit() or len(message_id) > 19 or len(message_id) < 17:
-        return await ctx.send("Invalid message ID. Please provide a valid numeric message ID.")
-
-    # Fetch the channel and the message
-    channel = ctx.channel
-
-    try:
-        message = await channel.fetch_message(int(message_id))
-    except discord.NotFound:
-        return await ctx.send("Message not found. Please provide a valid message ID.")
-
-    # Check if the message contains stickers
-    if len(message.stickers) == 0:
-        return await ctx.send("There is no sticker in the message to steal.")
-
-    # Get the first sticker from the message
-    sticker = message.stickers[0]
-    errors = []
-
-    # Read the sticker data and wrap it in BytesIO
-    try:
-        sticker_data = await sticker.read()
-        sticker_file = io.BytesIO(sticker_data)
-    except Exception as e:
-        return await ctx.send(f"Failed to read the sticker: {str(e)}", ephemeral=True)
-
-    # Handle the emoji
-    emoji_object = discord.utils.get(guild.emojis, name='skull')
-    if emoji_object is None:
-        emoji_object = ':smiley:'
-        emoji_message = "The specified emoji was not found. Proceeding without an emoji."
-    else:
-        emoji_message = ""
-
-    # Determine the sticker limit based on server Nitro level
-    nitro_level = guild.premium_tier
-    max_stickers = {0: 5, 1: 15, 2: 30, 3: 60}[nitro_level]
-    current_sticker_count = len(guild.stickers)
-
-    # Check if the server has enough sticker slots available
-    if current_sticker_count >= max_stickers:
-        return await ctx.send("The sticker slots are full. Please remove a sticker before adding a new one.")
-
-    # Use provided name or fall back to the sticker's existing name
-    if sticker_name is None or sticker_name.strip() == "":
-        sticker_name = sticker.name
-
-    # Check for duplicate sticker names
-    existing_sticker = discord.utils.get(guild.stickers, name=sticker_name)
-    if existing_sticker is not None:
-        sticker_name += "_copy"  # Append "_copy" to the name to make it unique
-
-    # Create the sticker
-    try:
-        new_sticker = await guild.create_sticker(
-            name=sticker_name,
-            description=f"Sticker copied from message ID **{message_id}**",
-            file=discord.File(sticker_file, filename=f"{sticker_name}.png"),
-            emoji=emoji_object
-        )
-
-        # Create an embed for the success message
-        embed = discord.Embed(
-            title="Sticker Stolen Successfully!",
-            description=f"Successfully stole the sticker! Sticker name: `{new_sticker.name}`. {emoji_message}",
-            color=discord.Color.green()
-        )
-
-        await ctx.send(embed=embed)
-
-    except discord.HTTPException as e:
-        errors.append(f"Failed to create sticker due to: *{str(e)}*")
-    except Exception as e:
-        errors.append(f"An unexpected error occurred: *{str(e)}*")
-
-    if errors:
-        embedErr = discord.Embed(title="Error", description="".join(errors), color=discord.Color.red())
-        await ctx.send(embed=embedErr)
-
-
-# @steal_sticker.error
-async def steal_sticker_error(ctx, error):
-    err = []
-    if isinstance(error, commands.MissingRequiredArgument):
-        err.append("You need to mention a proper message ID for this command to work.")
-    else:
-        err.append(f"An error occurred: *{str(error)}*")
-
-    if err:
-        errEmbd = discord.Embed(title="Error", description="".join(err), color=discord.Color.red())
-        await ctx.send(embed=errEmbd)
-
 
 # --- Hybrid `roleroulette` (works as both !roleroulette and /role_roulette) ---
 @commands.hybrid_command(name="roleroulette", description="Temporarily assigns a random role to a user for a set period",
@@ -2655,12 +2449,6 @@ async def show_perms_hybrid(ctx: commands.Context):
     await ctx.send(embed=embed, view=view)
 
 
-# <---------REMOVE---------> Old text-only `setperm`
-# @bot.command(name="setperm",
-#              help=f"Toggle permissions for a specified role.\n**Syntax**: setperm @role(or role_ID) permission(or permission no.)")
-# @commands.guild_only()
-# @commands.bot_has_permissions(manage_roles=True)
-# async def set_perm(ctx, role: str, *, perm: str):
 
 # --- Hybrid `setperm` (works as both !setperm and /setperm) ---
 @commands.hybrid_command(name="setperm", description="Toggle permissions for a specified role.", help="Toggle permissions for a specified role.\n**Syntax**: setperm @role(or role_ID) permission(or permission no.)")
@@ -2726,15 +2514,13 @@ async def set_perm_hybrid(ctx: commands.Context, role: str, *, perm: str):
         )
         await ctx.send(embed=embed)
     except discord.Forbidden:
-        await ctx.send(embed=discord.Embed(title="Error", description="I don't have permission to modify that role.",
-                                           color=discord.Color.red()))
+        await ctx.send(embed=discord.Embed(title="Error", description="I don't have permission to modify that role.", color=discord.Color.red()))
     except discord.HTTPException as e:
         await ctx.send(
             embed=discord.Embed(title="Error", description=f"Failed to update permissions due to an error: *{str(e)}*",
                                 color=discord.Color.red()))
     except Exception as e:
-        await ctx.send(embed=discord.Embed(title="Error", description=f"An unexpected error occurred: *{str(e)}*",
-                                           color=discord.Color.red()))
+        await ctx.send(embed=discord.Embed(title="Error", description=f"An unexpected error occurred: *{str(e)}*", color=discord.Color.red()))
 
 
 @set_perm_hybrid.error
@@ -2765,12 +2551,6 @@ async def set_perm_hybrid_error(ctx, error):
 
 
 
-
-# <---------REMOVE---------> Old text-only `role`
-# @bot.command(name="role", help=f"Toggles a role for a given user or multiple users.\n**Syntax**: role @user @role")
-# @commands.guild_only()
-# @commands.bot_has_permissions(manage_roles=True)
-# async def role(ctx, *args):
 
 # --- Hybrid `role` (works as both !role and /role) ---
 @commands.hybrid_command(name="role", description="Toggles a role for a given user or multiple users.", help="Toggles a role for a given user or multiple users.\n**Syntax**: role @user @role")
@@ -2910,13 +2690,6 @@ async def role_hybrid_error(ctx, error):
             await ctx.send(msg)
 
 
-#
-
-# <---------REMOVE---------> Old text-only `setrole`
-# @bot.command(name="setrole", help=f"Sets a role to your desired position in Role Hierarchy.\n**Syntax**: setrole @role position")
-# @commands.guild_only()
-# @commands.bot_has_permissions(manage_roles=True)
-# async def setrole(ctx, role_arg: str, position: int):
 
 # --- Hybrid `setrole` (works as both !setrole and /setrole) ---
 @commands.hybrid_command(name="setrole", description="Sets a role to your desired position in Role Hierarchy.", help="Sets a role to your desired position in Role Hierarchy.\n**Syntax**: setrole @role position")
@@ -3071,9 +2844,6 @@ async def set_role_position_hybrid_error(ctx, error):
             await ctx.send(msg)
 
 
-# <---------REMOVE---------> Old text-only `whois`
-# @bot.command(name="whois", aliases=["w", "W", "who", "profile", "WHO", "Who"], help=f"Give you info about yourself or another user.\n**Syntax**: w @user(s) or whois @user(s)")
-# async def whois(ctx, *args):
 
 # --- Hybrid `whois` (works as both !whois and /whois) ---
 @commands.hybrid_command(name="whois", aliases=["w", "W", "who", "profile", "WHO", "Who"], description="Give you info about yourself or another user.", help="Give you info about yourself or another user.\n**Syntax**: w @user(s) or whois @user(s)")
@@ -3278,18 +3048,8 @@ async def _purge_matching(channel, amount: int, predicate, search_multiplier: in
     search_limit = min(amount * search_multiplier, hard_search_cap)
     return await channel.purge(limit=search_limit, check=check, bulk=True)
 
-# <---------REMOVE---------> Old text-only `purge` + old slash `/purge`
-# @bot.command(name="purge", help=(
-#     "Deletes messages in bulk.\n"
-#     "**Syntax**:\n"
-#     "  purge <amount>                       — delete last <amount> messages\n"
-#     "  purge bots <amount>                  — delete <amount> bot messages\n"
-#     "  purge users <amount>                 — delete <amount> human messages\n"
-#     "  purge @user [@user2 ...] <amount>    — delete <amount> messages from those member(s)"
-# ))
-# @commands.guild_only()
-# @commands.bot_has_permissions(manage_messages=True, read_message_history=True)
-# async def purge(ctx, *args):
+
+
 
 # --- Hybrid `purge` (works as both !purge and /purge) ---
 @commands.hybrid_command(name="purge", description="Bulk delete messages in this channel.", help="Bulk delete messages in this channel.\n**Syntax**: purge <amount> | purge bots <amount> | purge users <amount> | purge @user <amount>")
@@ -3392,10 +3152,6 @@ async def purge_hybrid_error(ctx, error):
             await ctx.send(msg, ephemeral=True)
         else:
             await ctx.send(msg)
-
-# <---------REMOVE---------> Old slash-only `purge` (now merged into purge_hybrid above)
-
-
 
 
 async def fetch_logs(moderator_id, page, limit=5):
@@ -5448,157 +5204,6 @@ async def notify_wishers_on_slave_freed(ctx, slave_id, guild_id, price):
         async with utils.db_pool.acquire() as cursor:
             await cursor.execute(""" DELETE FROM wishes WHERE slave_id = $1 AND guild_id = $2 """, slave_id, guild_id)
 
-# <---------REMOVE---------> tower command (removed entirely)
-# @bot.command(name="tower", help=f"Climb the tower to get rich!!\n**Syntax**: tower start <bet_amount>")
-# async def tower(ctx, action: str, bet: int = None):
-
-#     return await ctx.reply("In Development right now.")
-
-#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "tower"):
-#         await ctx.reply("You are blocked from using `tower`.")
-#         return
-#     prefix = ctx.prefix
-#     user_id = ctx.author.id
-#     now = datetime.utcnow()
-
-#     if action == "start":
-#         if user_id in cooldowns and cooldowns[user_id] > now:
-#             remaining_time = cooldowns[user_id] - now
-#             minutes, seconds = divmod(remaining_time.total_seconds(), 60)
-#             await ctx.send(
-#                 f"⏳ You can only start a new Tower game after every 60 minutes.\n"
-#                 f"Try again in {int(minutes)}m {int(seconds)}s.")
-#             return
-
-#         if user_id in tower_games:
-#             await ctx.reply(
-#                 f"⚠️ You already have an active Tower game. Use `{prefix}tower climb` or `{prefix}tower stop`.")
-#             return
-
-#         if bet is None or bet <= 10:
-#             await ctx.reply("⚠️ You must specify a bet greater than 10 Kero to start the game.")
-#             return
-#         user_balance = await get_user_balance(user_id)
-#         if user_balance < bet:
-#             await ctx.reply(f"⚠️ You don't have enough Kero to place that bet. Your balance: {user_balance} Kero.")
-#             return
-
-#         # await update_user_balance(user_id, -bet)
-#         tower_games[user_id] = {
-#             "current_floor": 0,
-#             "current_reward": 0,
-#             "bet": bet,
-#         }
-#         await ctx.send(
-#             f"🎲 {ctx.author.mention}, you've started the Tower game with a bet of **{bet} Kero**!\n"
-#             f"Climb to higher floors by typing `{prefix}tower climb`.\nType `{prefix}tower stop` to cash out your winnings.")
-#         return
-
-#     elif action == "climb":
-#         game_data = tower_games.get(user_id)
-#         if not game_data:
-#             await ctx.send(f"⚠️ You need to start the game first with `{prefix}tower start <bet>`.")
-#             return
-
-#         current_floor = game_data["current_floor"]
-#         bet = game_data["bet"]
-
-#         floor_data = {
-#             1: {"reward_multiplier": 1.2, "loss_multiplier": 1.0},
-#             2: {"reward_multiplier": 1.4, "loss_multiplier": 1.2},
-#             3: {"reward_multiplier": 1.6, "loss_multiplier": 1.4},
-#             4: {"reward_multiplier": 1.8, "loss_multiplier": 1.6},
-#             5: {"reward_multiplier": 2.0, "loss_multiplier": 1.8},
-#             6: {"reward_multiplier": 2.2, "loss_multiplier": 2.0},
-#             7: {"reward_multiplier": 2.4, "loss_multiplier": 2.2},
-#             8: {"reward_multiplier": 2.6, "loss_multiplier": 2.4},
-#             9: {"reward_multiplier": 2.8, "loss_multiplier": 2.6},
-#             10: {"reward_multiplier": 3.0, "loss_multiplier": 2.8}
-#         }
-
-#         # floor_data = {
-#         #    1: {"reward_increase": 0.15, "loss_increase": 1.0, "next_loss_increase": 1.0},
-#         #    2: {"reward_increase": 0.15, "loss_increase": 1.0, "next_loss_increase": 1.1},
-#         #    3: {"reward_increase": 0.25, "loss_increase": 1.1, "next_loss_increase": 1.2},
-#         #    4: {"reward_increase": 0.35, "loss_increase": 1.2, "next_loss_increase": 1.3},
-#         #    5: {"reward_increase": 0.45, "loss_increase": 1.3, "next_loss_increase": 1.5},
-#         #    6: {"reward_increase": 0.6, "loss_increase": 1.5, "next_loss_increase": 1.7},
-#         #    7: {"reward_increase": 0.75, "loss_increase": 1.7, "next_loss_increase": 2.0},
-#         #    8: {"reward_increase": 1.0, "loss_increase": 2.0, "next_loss_increase": 2.25},
-#         #    9: {"reward_increase": 1.5, "loss_increase": 2.25, "next_loss_increase": 2.5},
-#         #    10: {"reward_increase": 3.0, "loss_increase": 2.5, "next_loss_increase": 0}}
-
-#         if current_floor >= 10:
-#             await ctx.reply(
-#                 "🚀 Wohooooooooo~ You've reached the TOP FLOOR against all odds! Good Job man!! You're hella lucky. I'm jealous of you now, shi...\nAnyways, cash out with `tower stop` to get all your rewards.")
-#             return
-
-#         next_floor = current_floor + 1
-#         floor_info = floor_data.get(next_floor)
-#         if not floor_info:
-#             await ctx.send("⚠️ No data for this floor. Please contact support.")
-#             return
-
-#         success_chance = max(5, 90 - 10 * current_floor)  # 90%, 80%, ..., 5%
-#         loss_amount = int(bet * floor_info["loss_multiplier"])
-#         reward_gain = int(bet * (floor_info["reward_multiplier"] - 1))
-#         game_data["current_round_loss"] = loss_amount
-#         game_data["current_round_reward"] = reward_gain
-
-#         wallet_balance = await get_user_balance(user_id)
-#         if wallet_balance < loss_amount:
-#             await ctx.reply(
-#                 f"⚠️ You don't have enough Kero to bear the loss if you fall. Loss would be **{loss_amount} Kero**.\n"
-#                 f"Type `{prefix}tower stop` to cash out your current reward of **{game_data['current_reward']} Kero**.")
-#             return
-
-#         outcome = random.randint(1, 100)
-#         if outcome <= success_chance:
-#             game_data["current_floor"] = next_floor
-#             game_data["current_reward"] += reward_gain
-#             nxtfloorloss = int(floor_data.get(next_floor)["loss_multiplier"] * bet)
-
-#             await ctx.reply(
-#                 f"🎉 Success! You've climbed to **Floor {next_floor}**.\n 💰 Reward for this climb: **{reward_gain} Kero**. Total Reward: **{game_data['current_reward']} Kero**\n"
-#                 f"🎲 Next floor success chance: **{max(5, success_chance - 10)}%**\n"
-#                 f"💥 If you fall, you'll lose **{nxtfloorloss} Kero**.\n"
-#                 f"Type `{prefix}tower climb` to keep climbing or `{prefix}tower stop` to cash out.")
-#         else:
-#             await update_user_balance(user_id, -game_data["current_round_loss"])
-#             tower_games.pop(user_id, None)
-#             cooldowns[user_id] = now + timedelta(minutes=60)
-#             await ctx.send(
-#                 f"💥 You fell from the Tower and lost **{game_data['current_round_loss']} Kero.** Better luck next time!")
-#         return
-
-#     elif action == "stop":
-#         game_data = tower_games.get(user_id)
-#         if not game_data:
-#             await ctx.send("⚠️ You don't have an active Tower game to stop.")
-#             return
-
-#         reward = game_data["current_reward"]
-#         floor = game_data["current_floor"]
-#         total_winnings = reward + game_data["bet"]
-
-#         if await is_slave(user_id, ctx.guild.id):
-#             master = await get_master_of_slave(ctx, user_id, ctx.guild.id)
-#             master_share = int(total_winnings * 0.2)
-#             total_winnings -= master_share
-
-#             await update_user_balance(master.id, master_share)
-#             await ctx.send(
-#                 f"💸 {ctx.author.mention}, since you are a slave, **20% ({master_share} Kero)** of your winnings were transferred to your master {master.display_name}.")
-#         await update_user_balance(user_id, total_winnings)
-#         tower_games.pop(user_id, None)
-#         cooldowns[user_id] = now + timedelta(minutes=60)
-#         await ctx.send(
-#             f"🎉 {ctx.author.mention}, you've cashed out from **Floor {floor}** with **{reward} Kero**! Well played!")
-#         return
-
-#     await ctx.reply("⚠️ Invalid action. Use `start`, `climb`, or `stop`.")
-
-
 
 
 @bot.tree.command(name="buckshot", description="Challenge another player to Buckshot Roulette!")
@@ -6933,200 +6538,7 @@ def build_command_embed(command, categories, fallback_prefix):
     embed.add_field(name="🔀 Aliases", value=", ".join(aliases) if aliases else "None", inline=False)
     return embed
 
-# <---------REMOVE---------> Old text-only `help`
-# @bot.command(name="help", aliases=["Help", "HELP"], help="Display all the commands organized by category.\n**Syntax**: help or help <command_name>")
-# @commands.guild_only()
-# async def help_command(ctx, command_name: str = None):
-#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "help"):
-#         await ctx.reply("You are blocked from using help command.")
-#         return
-#     prefix = ctx.prefix
-#     all_commands = get_all_commands()
-#     categories = categorize_commands(all_commands)
-#     if command_name:
-#         command = bot.get_command(command_name) or bot.tree.get_command(command_name)
-#         if not command:
-#             await ctx.send(f"❌ Command `{command_name}` not found.")
-#             return
-#         await ctx.send(embed=build_command_embed(command, categories, prefix))
-#         return
-#     thumb_probe = _thumbnail_file()
-#     use_thumb = thumb_probe is not None
-#     embeds = build_category_embeds(categories, f"{prefix}help <command_name>", use_thumbnail=use_thumb)
-#     if not embeds:
-#         await ctx.send("No commands available to display.")
-#         return
-#     class CategoryDropdown(discord.ui.Select):
-#         def __init__(self):
-#             options = [discord.SelectOption(label=category, description=f"View commands in the {category} category.") for category in embeds.keys()]
-#             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1, options=options)
-#         async def callback(self, interaction: discord.Interaction):
-#             if interaction.user.id != ctx.author.id:
-#                 return await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.", ephemeral=True)
-#             thumb = _thumbnail_file()
-#             await interaction.response.edit_message(embed=embeds[self.values[0]], attachments=[thumb] if thumb else [])
-#     class HelpMenuView(discord.ui.View):
-#         def __init__(self, author):
-#             super().__init__(timeout=180)
-#             self.author = author
-#             self.add_item(CategoryDropdown())
-#         async def interaction_check(self, interaction: discord.Interaction) -> bool:
-#             return interaction.user.id == self.author.id
-#     first_category = next(iter(embeds))
-#     initial_embed = embeds[first_category]
-#     if use_thumb:
-#         await ctx.send(embed=initial_embed, file=thumb_probe, view=HelpMenuView(ctx.author))
-#     else:
-#         await ctx.send(embed=initial_embed, view=HelpMenuView(ctx.author))
-        
-        
-# @bot.command(name="help", aliases=["Help", "HELP"], help="Display all the commands organized by category.\n**Syntax**: help or help <command_name>")
-# @commands.guild_only()
-# async def help_command(ctx, command_name: str = None):
-#     if await is_command_blocked(ctx.guild.id, ctx.author.id, "help"):
-#         await ctx.reply("You are blocked from using help command.")
-#         return
 
-#     prefix = ctx.prefix
-#     global prefixx
-#     prefixx = ctx.prefix
-#     bot_commands = bot.commands
-#     slash_commands = bot.tree.get_commands()
-#     all_commands = list(bot_commands)
-#     for sc in slash_commands:
-#         if not any(sc.name.lower() == cmd.name.lower() for cmd in all_commands):
-#             all_commands.append(sc)
-
-#     categories = {"🛡️ Moderation": [], "🤖 User": [], "👻 Fun": [], "💰 Economy": [], "🛠️ Config": [], "🎬 Actions": []}
-
-#     for command in all_commands:
-#         if command.name in ['mute', 'unmute', 'ban', 'unban', 'massban', 'setrole', 'setperm', 'role', 'showperm',
-#                             'setnick', 'purge', 'modlogs', 'purgereaction', 'stealsticker', 'massunban']:
-#             categories["🛡️ Moderation"].append(command)
-#         elif command.name in ["setprefix", 'botperm', 'giveperm', 'takeperm', 'setup', "selfprefix", 'ping']:
-#             categories["🛠️ Config"].append(command)
-#         elif command.name in ['say', 'spam', 'roleroulette', 'cf', 'diceroll', 'jackpot', 'tower', 'fetchwater', 'bakebread',
-#                               'fanmaster', 'minerock', 'shinecrown', 'echo', 'buckshot', 'buckshot_help', 'hello', 'colorwars', 'colorwars_help', 'memory', 'memory_help', 'waifu', 'wtags']:
-#             categories["👻 Fun"].append(command)
-#         elif command.name in ['shop', 'daily', 'slbuy', 'beg', 'wallet', 'chkprice', 'lb', 'buycmd', 'auction', 'trade',
-#                               'give', 'tip', 'tribute']:
-#             categories["💰 Economy"].append(command)
-#         elif command.name in ['whois', 'av', 'afk', 'img', 'msgcount', 'bn', 'ping', 'help', 'slshow', 'slinfo', 'wish',
-#                               'sljail', 'slunjail', 'slkick', 'slmute', 'slmute', 'slunmute', 'slsetnick', 'slrole',
-#                               'slwhip', 'slrelease', 'slrefund', 'escape']:
-#             categories["🤖 User"].append(command)
-#         elif command.name in ACTIONS:
-#             categories["🎬 Actions"].append(command)
-
-
-#     if command_name:
-#         command = bot.get_command(command_name)
-#         if not command:
-#             command = bot.tree.get_command(command_name)
-#         if not command:
-#             await ctx.send(f"❌ Command `{command_name}` not found.")
-#             return
-
-#         command_help = getattr(command, "help", None)
-#         if not command_help:
-#             command_help = getattr(command, "description", "No description available.")
-
-#         if "**Syntax**:" in command_help:
-#             description, syntax = command_help.split("**Syntax**:")
-#         else:
-#             description, syntax = command_help, None
-#         description = description.strip() if description else "No description available."
-#         cmd_prefix = "/" if isinstance(command,
-#                                        (discord.app_commands.Command, discord.app_commands.Group)) else ctx.prefix
-#         syntax = f"`{cmd_prefix}{syntax.strip()}`" if syntax else "No syntax specified."
-
-#         embed = discord.Embed(
-#             title=f"🔍 Command: `{cmd_prefix}{command.name}`",
-#             description=description,
-#             color=discord.Color.green(),)
-        
-#         embed.add_field(
-#             name="📂 Category",
-#             value=f"{next((k for k, v in categories.items() if command in v), 'Unknown')}",
-#             inline=False, )
-        
-#         embed.add_field(name="📖 Syntax", value=syntax, inline=False)
-
-#         try:
-#             # for text commands
-#             cd = None
-#             if hasattr(command, "_buckets"):
-#                 cooldown_obj = command._buckets._cooldown
-#                 if cooldown_obj:
-#                     cd = f"{cooldown_obj.rate} use(s) per {cooldown_obj.per}s"
-#             # for slash commands
-#             elif hasattr(command, "cooldown") and command.cooldown:
-#                 cobj = command.cooldown
-#                 cd = f"{cobj.rate} use(s) per {cobj.per}s"
-#         except Exception:
-#             cd = None
-#         embed.add_field(
-#             name="⏱️ Cooldown",
-#             value=cd or "None",
-#             inline=False
-#         )
-        
-#         aliases = getattr(command, "aliases", [])
-#         alias_str = ", ".join(aliases) if aliases else "None"
-#         embed.add_field(name="🔀 Aliases", value=alias_str, inline=False)
-
-#         await ctx.send(embed=embed)
-#         return
-
-#     embeds = {}
-#     for category, command_list in categories.items():
-#         if not command_list:
-#             continue
-
-#         commands_display = "  ".join(f"`{cmd.name}`" for cmd in command_list)
-
-#         embed = discord.Embed(title=f"{category} Commands",
-#                               description=f"**🔎 To learn more about a specific command, type:** `{prefix}help <command_name>`\n\n{commands_display}",
-#                               color=discord.Color.random(), )
-
-#         embed.set_thumbnail(url="attachment://thumbnail.png")
-#         embed.set_footer(text="Slickey Bot | Helping You Rule Your Server!")
-#         embeds[category] = embed
-
-#     # Dropdown menu
-#     class CategoryDropdown(discord.ui.Select):
-#         def __init__(self):
-#             options = [
-#                 discord.SelectOption(label=category, description=f"View commands in the {category} category.")
-#                 for category in categories.keys()
-#             ]
-#             super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
-#                              options=options)
-
-#         async def callback(self, interaction: discord.Interaction):
-#             if interaction.user.id != ctx.author.id:
-#                 await interaction.response.send_message("⛔ Only the command invoker can interact with this menu.",
-#                                                         ephemeral=True)
-#                 return
-
-#             selected_category = self.values[0]
-#             embed = embeds[selected_category]
-#             file = discord.File("thumbnail.png", filename="thumbnail.png")
-#             await interaction.response.edit_message(embed=embed, attachments=[file])
-
-#     # View with the dropdown menu
-#     class HelpMenuView(discord.ui.View):
-#         def __init__(self, author):
-#             super().__init__(timeout=180)
-#             self.author = author
-#             self.add_item(CategoryDropdown())
-
-#         async def interaction_check(self, interaction: discord.Interaction) -> bool:
-#             return interaction.user.id == self.author.id
-
-#     initial_embed = embeds[list(categories.keys())[0]]
-#     initial_file = discord.File("thumbnail.png", filename="thumbnail.png")
-#     await ctx.send(embed=initial_embed, file=initial_file, view=HelpMenuView(ctx.author))
 
 
 # --- Hybrid `help` (works as both !help and /help) ---
@@ -7204,69 +6616,6 @@ async def help_hybrid(ctx: commands.Context, command_name: str = None):
     else:
         await ctx.send(embed=initial_embed, view=HelpMenuView(ctx.author))
 
-
-# <---------REMOVE---------> Old slash-only `help` (now merged into help_hybrid above)
-# @bot.tree.command(name="help", description="Display all commands organized by category.")
-# @discord.app_commands.guild_only()
-# @discord.app_commands.describe(command_name="(Optional) The specific command to get help for")
-# async def slash_help_command(interaction: discord.Interaction, command_name: str = None):
-    if await is_command_blocked(interaction.guild.id, interaction.user.id, "help"):
-        await interaction.response.send_message("You are blocked from using help command.", ephemeral=True)
-        return
-
-    prefix = await resolve_prefix(interaction.guild_id, interaction.user.id)
-    
-    all_commands = get_all_commands()
-    categories = categorize_commands(all_commands)
-
-    if command_name:
-        command = bot.get_command(command_name) or bot.tree.get_command(command_name)
-        if not command:
-            await interaction.response.send_message(f"❌ Command `{command_name}` not found.", ephemeral=True)
-            return
-        await interaction.response.send_message(embed=build_command_embed(command, categories, prefix))
-        return
-
-    thumb_probe = _thumbnail_file()
-    use_thumb = thumb_probe is not None
-    embeds = build_category_embeds(categories, "/help command_name:<command>", use_thumbnail=use_thumb)
-    if not embeds:
-        await interaction.response.send_message("No commands available to display.", ephemeral=True)
-        return
-
-    class CategoryDropdown(discord.ui.Select):
-        def __init__(self):
-            options = [
-                discord.SelectOption(label=category, description=f"View commands in the {category} category.")
-                for category in embeds.keys()
-            ]
-            super().__init__(placeholder="💡 Select a category to explore commands!", min_values=1, max_values=1,
-                              options=options)
-
-        async def callback(self, interaction: discord.Interaction):
-            if interaction.user.id != self.view.author.id:
-                return await interaction.response.send_message(
-                    "⛔ Only the command invoker can interact with this menu.", ephemeral=True)
-            thumb = _thumbnail_file()
-            await interaction.response.edit_message(
-                embed=embeds[self.values[0]], attachments=[thumb] if thumb else [])
-
-    class HelpMenuView(discord.ui.View):
-        def __init__(self, author):
-            super().__init__(timeout=180)
-            self.author = author
-            self.add_item(CategoryDropdown())
-
-        async def interaction_check(self, interaction: discord.Interaction) -> bool:
-            return interaction.user.id == self.author.id
-
-    first_category = next(iter(embeds))
-    initial_embed = embeds[first_category]
-    if use_thumb:
-        await interaction.response.send_message(embed=initial_embed, file=thumb_probe, view=HelpMenuView(interaction.user))
-    else:
-        await interaction.response.send_message(embed=initial_embed, view=HelpMenuView(interaction.user))
-        
         
 
 async def main():
