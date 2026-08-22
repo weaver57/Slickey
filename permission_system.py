@@ -42,31 +42,35 @@ class PermissionDecision:
 COMMAND_REGISTRY: dict[str, tuple[str, str]] = {
     # Permission and server configuration
     **{name: ("configuration", "protected") for name in (
-        "permissions", "dashboard", "setup", "setprefix", "selfprefix", "setperm", "showperm", "debug", "getmem", "spawn",
-        "checkfunction",
+        "permissions", "dashboard", "setup", "setprefix", "selfprefix", "setperm", "showperm", "spawn",
     )},
     # Moderation and actions that affect another member or Discord role
     **{name: ("moderation", "protected") for name in (
         "mute", "unmute", "ban", "unban", "purge", "purgereaction", "setnick",
-        "role", "setrole", "roleroulette", "role_roulette", "modlogs", "stealsticker",
+        "role", "setrole", "roleroulette", "role_roulette", "modlogs",
         "sljail", "slunjail", "slmute", "slunmute", "slkick", "slsetnick", "slrole", "slwhip",
-        "massban", "massunban", "say", "echo",
+        "massban", "massunban", "say", "echo", "spam", "stop",
     )},
-    # Commands that alter the shared economy or server-wide games
-    **{name: ("economy", "protected") for name in (
+    # Economy — all commands are publicly accessible by default
+    **{name: ("economy", "public") for name in (
         "give", "tip", "tribute", "slbuy", "slrelease", "slrefund", "trade", "auction",
-        "buycmd", "spam", "stop",
+        "buycmd", "beg", "daily", "escape", "fetchwater", "bakebread", "fanmaster",
+        "minerock", "shinecrown", "jackpot", "wish",
     )},
     # Safe, self-service and informational commands
     **{name: ("utility", "public") for name in (
-        "afk", "msgcount", "img", "av", "bn", "whois", "wallet", "balance", "chkprice",
-        "shop", "iw", "dw", "slshow", "slinfo", "help", "ping", "hello", "waifu", "wtags", "yazy", "lb", "buckshot_help", "colorwars_help",
-        "memory_help", "ai_personality", "ai_forget", "ai", 
+        "afk", "msgcount", "av", "bn", "whois", "wallet", "chkprice",
+        "shop", "slshow", "slinfo", "help", "ping", "hello", "waifu", "wtags", "lb",
+        "ai_personality", "ai_forget", "ai",
     )},
+    # Bot-creator only — these commands are invisible to everyone else
+    **{name: ("creator", "protected") for name in (
+        "balance", "debug", "getmem", "checkfunction", "iw", "dw",
+    )},
+    # Games — interactive games and their help subcommands
     **{name: ("games", "public") for name in (
-        "beg", "daily", "escape", "fetchwater", "bakebread", "fanmaster", "minerock",
-        "shinecrown", "cf", "diceroll", "jackpot", "wish", "tower", "buckshot", "colorwars",
-        "memory",
+        "cf", "diceroll", "buckshot", "colorwars", "memory",
+        "buckshot_help", "colorwars_help", "memory_help", "yazy",
     )},
 }
 # Slickey_Secondary_ creates these commands dynamically from ``ACTIONS``.
@@ -86,6 +90,72 @@ COMMAND_REGISTRY.update({name: ("social", "public") for name in PUBLIC_ACTION_CO
 # Compatibility aliases share one stable policy key.  The values, not the
 # spellings users type, are persisted in new rules.
 COMMAND_ALIASES = {"role_roulette": "roleroulette"}
+
+# --- Auto-registration decorator ---
+def slickey_command(category: str, access: str = "protected"):
+    """Mark a command function with metadata for auto-registration.
+
+    Apply this decorator *before* the discord.py command decorator::
+
+        @commands.hybrid_command(name="mute")
+        @slickey_command("moderation", "protected")
+        async def mute(ctx, ...): ...
+
+    At startup, ``build_registry()`` scans all registered bot commands and
+    reads this metadata from ``cmd.callback`` to populate COMMAND_REGISTRY
+    and CATEGORY_MAP automatically.
+    """
+    def decorator(func):
+        if not hasattr(func, "_slickey_meta"):
+            func._slickey_meta = {}
+        func._slickey_meta["category"] = category
+        func._slickey_meta["access"] = access
+        return func
+    return decorator
+
+
+def build_registry(bot) -> None:
+    """Scan every registered command and populate COMMAND_REGISTRY.
+
+    Called once in ``main()`` after all cogs/commands are loaded.  Commands
+    decorated with ``@slickey_command`` are placed in the registry by their
+    metadata.  Any command *not* decorated falls back to the hardcoded values
+    already present in COMMAND_REGISTRY (imported at module level).
+    """
+    for cmd in bot.commands:  # prefix + hybrid commands
+        cb = getattr(cmd, "callback", None)
+        meta = getattr(cb, "_slickey_meta", None) if cb else None
+        if meta:
+            COMMAND_REGISTRY[cmd.name] = (meta["category"], meta["access"])
+    for cmd in bot.tree.get_commands():  # pure slash commands
+        cb = getattr(cmd, "callback", None)
+        meta = getattr(cb, "_slickey_meta", None) if cb else None
+        if meta:
+            COMMAND_REGISTRY[cmd.name] = (meta["category"], meta["access"])
+    # Rebuild derived dicts
+    global COMMAND_CATEGORIES, PROTECTED_COMMANDS
+    COMMAND_CATEGORIES = {name: cat for name, (cat, _) in COMMAND_REGISTRY.items()}
+    PROTECTED_COMMANDS = {name for name, (_, acc) in COMMAND_REGISTRY.items() if acc == "protected"}
+
+# ``command.dashboard`` is the historical grant used to open the web dashboard.
+# It is kept as an alias of ``policy.dashboard.access`` so existing server
+# rules continue to grant dashboard access after the rename.  No engine code
+# needs to special-case it; the alias is resolved when a rule is saved or when
+# the evaluator looks up the policy catalogue.
+DASHBOARD_POLICY_KEY = "policy.dashboard.access"
+LEGACY_DASHBOARD_ALIAS = "command.dashboard"
+
+
+def canonical_policy_key(permission_key: str) -> str:
+    """Return the persisted policy key, mapping legacy aliases forward.
+
+    This is the single place where ``command.dashboard`` is rewritten to its
+    successor.  Callers should normalise before saving or evaluating.
+    """
+    key = permission_key.lower().strip()
+    if key == LEGACY_DASHBOARD_ALIAS:
+        return DASHBOARD_POLICY_KEY
+    return key
 
 COMMAND_CATEGORIES = {name: category for name, (category, _) in COMMAND_REGISTRY.items()}
 
@@ -144,6 +214,7 @@ def builtin_permission_definitions() -> tuple[PermissionDefinition, ...]:
     definitions.extend(
         PermissionDefinition(key, label, description, "policy", "protected", "policy")
         for key, label, description in (
+            ("policy.dashboard.access", "Open the dashboard", "Open this server's Slickey web dashboard."),
             ("policy.rule.read", "View policies", "View this server's custom permission policies."),
             ("policy.rule.create", "Create policies", "Create scoped allow policies."),
             ("policy.rule.update", "Edit policies", "Edit existing permission policies."),
@@ -154,6 +225,7 @@ def builtin_permission_definitions() -> tuple[PermissionDefinition, ...]:
             ("policy.role.update", "Edit custom roles", "Rename or reprioritize Slickey custom roles."),
             ("policy.role.assign", "Assign custom roles", "Assign or remove Slickey custom roles."),
             ("policy.role.delete", "Delete custom roles", "Delete Slickey custom roles."),
+            ("policy.role.auto_assign", "Auto-assign roles", "Configure roles that are automatically given to new members."),
             ("policy.audit.read", "View policy audit log", "View permission-policy change history."),
         )
     )
@@ -202,6 +274,7 @@ CREATE TABLE IF NOT EXISTS bot_role_memberships (
     role_id BIGINT NOT NULL REFERENCES bot_permission_roles(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL,
     assigned_by BIGINT,
+    source TEXT NOT NULL DEFAULT 'manual',
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (guild_id, role_id, user_id)
 );
@@ -256,6 +329,28 @@ CREATE TABLE IF NOT EXISTS bot_permission_migrations (
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS bot_role_auto_assign (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL REFERENCES bot_permission_roles(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guild_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS bot_role_discord_sync (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    discord_role_id BIGINT NOT NULL,
+    slickey_role_id BIGINT NOT NULL REFERENCES bot_permission_roles(id) ON DELETE CASCADE,
+    on_remove TEXT NOT NULL DEFAULT 'keep' CHECK (on_remove IN ('keep', 'remove')),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (guild_id, discord_role_id, slickey_role_id)
+);
+
 CREATE TABLE IF NOT EXISTS bot_command_catalog (
     command_path TEXT PRIMARY KEY,
     permission_key TEXT NOT NULL,
@@ -291,6 +386,21 @@ async def initialize_permission_system(pool) -> None:
                     (guild_id, permission_key, subject_type, subject_id,
                         scope_type, scope_id, expires_at);
             """)
+            # Upgrade audit log schema: add human-readable actor name and
+            # before/after state snapshots so the trail is reconstructable.
+            await conn.execute("""
+                ALTER TABLE bot_permission_audit_log
+                    ADD COLUMN IF NOT EXISTS actor_name TEXT NOT NULL DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS before_state JSONB,
+                    ADD COLUMN IF NOT EXISTS after_state JSONB;
+            """)
+            # Track provenance: distinguish manual grants from auto-assign
+            # and Discord role sync so automated systems never overwrite
+            # intentional human assignments.
+            await conn.execute("""
+                ALTER TABLE bot_role_memberships
+                    ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+            """)
             for definition in BUILTIN_PERMISSION_DEFINITIONS:
                 await conn.execute(
                     """INSERT INTO bot_permission_definitions
@@ -311,6 +421,12 @@ async def initialize_permission_system(pool) -> None:
                     "UPDATE bot_permission_rules SET permission_key = $1 WHERE permission_key = $2",
                     f"command.{canonical_name}", f"command.{old_name}",
                 )
+            # Migrate the historical ``command.dashboard`` grant to its successor
+            # so existing rules continue to open the dashboard after the rename.
+            await conn.execute(
+                "UPDATE bot_permission_rules SET permission_key = $1 WHERE permission_key = $2",
+                DASHBOARD_POLICY_KEY, LEGACY_DASHBOARD_ALIAS,
+            )
             # Import existing data once.  The old tables are never consulted by
             # policy evaluation; this is a safe, reversible migration path.
             migrated = await conn.fetchval("SELECT 1 FROM bot_permission_migrations WHERE name = 'legacy-v1'")
@@ -332,8 +448,8 @@ async def initialize_permission_system(pool) -> None:
                     row["guild_id"], row["role"].title(), "Migrated from Slickey's legacy permission system", row["level"],
                 )
                 await conn.execute(
-                    """INSERT INTO bot_role_memberships (guild_id, role_id, user_id)
-                       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING""",
+                    """INSERT INTO bot_role_memberships (guild_id, role_id, user_id, source)
+                       VALUES ($1, $2, $3, 'manual') ON CONFLICT DO NOTHING""",
                     row["guild_id"], role_id, row["user_id"],
                 )
             command_permissions = await conn.fetch("SELECT guild_id, user_id, command_name FROM command_permissions") if has_command_permissions else ()
@@ -361,9 +477,14 @@ async def sync_command_catalog(pool, bot: commands.Bot) -> set[str]:
         return set()
     entries: dict[str, tuple[str, str, str, str, str]] = {}
     review_required: set[str] = set()
+    # Collect names already seen via text/prefix commands so hybrid
+    # commands (which appear in both bot.commands and bot.tree) are
+    # recorded only once — as the prefix variant.
+    text_names: set[str] = set()
     for command in bot.commands:
         if command.name == "help":
             continue
+        text_names.add(command.name.lower())
         path = command.qualified_name.lower()
         name = command.name.lower()
         canonical = canonical_command_name(name)
@@ -377,6 +498,10 @@ async def sync_command_catalog(pool, bot: commands.Bot) -> set[str]:
             continue
         path = command.qualified_name.lower()
         name = path.split()[-1]
+        # Skip slash commands that are hybrids — they were already
+        # captured in the text/prefix pass above.
+        if name in text_names:
+            continue
         root = path.split()[0]
         canonical = canonical_command_name(root)
         known = canonical in COMMAND_REGISTRY
@@ -393,6 +518,13 @@ async def sync_command_catalog(pool, bot: commands.Bot) -> set[str]:
                    description=EXCLUDED.description, category=EXCLUDED.category, default_access=EXCLUDED.default_access,
                    command_kind=EXCLUDED.command_kind, updated_at=NOW()""",
                 path, permission_key, label, description[:500], category, access, path.split(":", 1)[0],
+            )
+        # Remove stale catalog rows left over from previous runs (e.g.
+        # duplicate ``slash:`` entries created before the hybrid dedup).
+        if entries:
+            await conn.execute(
+                "DELETE FROM bot_command_catalog WHERE command_path != ALL($1::text[])",
+                list(entries.keys()),
             )
     bot._slickey_unclassified_commands = review_required
     return review_required
@@ -565,7 +697,10 @@ async def evaluate(
     if user_id == BOT_CREATOR_ID:
         return PermissionDecision(True, "Bot Creator bypass", trace=({"kind": "bypass", "label": "Bot Creator has permanent access."},))
     if guild_owner_id is not None and user_id == guild_owner_id:
-        return PermissionDecision(True, "Current Discord server owner", trace=({"kind": "bypass", "label": "Current Discord server owner has permanent access."},))
+        # The guild owner still cannot use creator-category commands.
+        _owner_cat = COMMAND_CATEGORIES.get(command_name, "")
+        if _owner_cat != "creator":
+            return PermissionDecision(True, "Current Discord server owner", trace=({"kind": "bypass", "label": "Current Discord server owner has permanent access."},))
     if pool is None:
         allowed = default_allowed(command_name) and not strict_unclassified
         return PermissionDecision(allowed, "Permission database unavailable; protected commands fail closed", trace=({"kind": "fallback", "label": "Permission database unavailable.", "outcome": "Allowed public command" if allowed else "Denied protected command"},))
@@ -681,6 +816,238 @@ async def actor_can_manage(pool, *, guild_id: int, user_id: int, guild_owner_id:
     return decision.allowed and decision.matched_rule_id is not None
 
 
+# Sections the dashboard may expose.  Each section is gated by an existing
+# ``policy.*`` capability so the engine is the single source of truth.
+# ``overview`` is always visible to anyone who can open the dashboard.
+DASHBOARD_SECTIONS: tuple[str, ...] = ("overview", "roles", "policies", "simulator", "auto-assign", "role-sync", "audit", "catalog")
+
+_DASHBOARD_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "overview": (DASHBOARD_POLICY_KEY,),
+    "roles": ("policy.role.read",),
+    "policies": ("policy.rule.read",),
+    "simulator": ("policy.rule.read",),
+    "audit": ("policy.audit.read",),
+    # The command catalogue is a read-only reference that anyone who can open
+    # the dashboard may browse; it inherits the access key.
+    "auto-assign": ("policy.role.assign",),
+    "role-sync": ("policy.role.assign",),
+    # The command catalogue is a read-only reference that anyone who can open
+    # the dashboard may browse; it inherits the access key.
+    "catalog": (DASHBOARD_POLICY_KEY,),
+}
+
+
+async def dashboard_view_sections(
+    pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int],
+    channel_id: Optional[int] = None, category_id: Optional[int] = None,
+) -> set[str]:
+    """Return the set of dashboard sections the user can see.
+
+    A user who can open the dashboard at all always sees ``overview`` and the
+    read-only ``catalog``.  Other sections appear exactly when the user holds
+    the corresponding ``policy.*`` capability.  This function only derives; it
+    introduces no new grant model.
+    """
+    visible: set[str] = set()
+    if pool is None:
+        return visible
+    if is_superuser(user_id, guild_owner_id):
+        return set(DASHBOARD_SECTIONS)
+    for section in DASHBOARD_SECTIONS:
+        requirements = _DASHBOARD_SECTION_REQUIREMENTS[section]
+        for key in requirements:
+            decision = await evaluate_permission(
+                pool, guild_id=guild_id, user_id=user_id, guild_owner_id=guild_owner_id,
+                permission_key=key, channel_id=channel_id, category_id=category_id,
+            )
+            if not (decision.allowed and decision.matched_rule_id is not None):
+                break
+        else:
+            visible.add(section)
+    return visible
+
+
+# ── Auto-assign roles ────────────────────────────────────────────────
+
+
+async def apply_auto_assign_roles(pool, guild_id: int, user_id: int) -> list[int]:
+    """Assign all enabled auto-assign roles to a new member.
+
+    Returns the list of role IDs that were assigned.
+    """
+    if pool is None:
+        return []
+    rows = await pool.fetch(
+        "SELECT id, role_id FROM bot_role_auto_assign"
+        " WHERE guild_id = $1 AND enabled = TRUE",
+        guild_id,
+    )
+    if not rows:
+        return []
+    assigned: list[int] = []
+    for row in rows:
+        try:
+            await pool.execute(
+                "INSERT INTO bot_role_memberships"
+                " (guild_id, role_id, user_id, assigned_by, source)"
+                " VALUES ($1, $2, $3, $4, 'auto-assign') ON CONFLICT DO NOTHING",
+                guild_id, row["role_id"], user_id, 0,  # 0 = system auto-assign
+            )
+            assigned.append(row["role_id"])
+        except Exception:
+            pass  # role may have been deleted between query and insert
+    return assigned
+
+
+# ── Discord role sync ────────────────────────────────────────────────
+
+
+async def process_discord_role_sync(pool, guild_id: int, user_id: int,
+                                    added_role_ids: list[int],
+                                    removed_role_ids: list[int]) -> dict:
+    """Process Discord role changes and apply/remove Slickey roles accordingly.
+
+    Returns a dict with ``assigned`` and ``removed`` lists of Slickey role IDs.
+    """
+    if pool is None or (not added_role_ids and not removed_role_ids):
+        return {"assigned": [], "removed": []}
+    result = {"assigned": [], "removed": []}
+
+    # ── Roles added on Discord → assign Slickey roles ──
+    if added_role_ids:
+        rows = await pool.fetch(
+            "SELECT id, slickey_role_id FROM bot_role_discord_sync"
+            " WHERE guild_id = $1 AND discord_role_id = ANY($2::bigint[]) AND enabled = TRUE",
+            guild_id, added_role_ids,
+        )
+        for row in rows:
+            try:
+                await pool.execute(
+                    "INSERT INTO bot_role_memberships"
+                    " (guild_id, role_id, user_id, assigned_by, source)"
+                    " VALUES ($1, $2, $3, $4, 'discord-sync') ON CONFLICT DO NOTHING",
+                    guild_id, row["slickey_role_id"], user_id, 0,
+                )
+                result["assigned"].append(row["slickey_role_id"])
+            except Exception:
+                pass
+
+    # ── Roles removed on Discord → handle on_remove policy ──
+    # Only touch rows with source='discord-sync' so manually granted
+    # Slickey roles are never yanked by sync automation.
+    if removed_role_ids:
+        rows = await pool.fetch(
+            "SELECT id, slickey_role_id, on_remove FROM bot_role_discord_sync"
+            " WHERE guild_id = $1 AND discord_role_id = ANY($2::bigint[]) AND enabled = TRUE",
+            guild_id, removed_role_ids,
+        )
+        for row in rows:
+            if row["on_remove"] == "remove":
+                try:
+                    await pool.execute(
+                        "DELETE FROM bot_role_memberships"
+                        " WHERE guild_id = $1 AND role_id = $2 AND user_id = $3"
+                        " AND source = 'discord-sync'",
+                        guild_id, row["slickey_role_id"], user_id,
+                    )
+                    result["removed"].append(row["slickey_role_id"])
+                except Exception:
+                    pass
+    return result
+
+
+# ── Permission simulator ──────────────────────────────────────────────
+
+
+async def simulate_all(
+    pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int],
+    channel_id: Optional[int] = None, category_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """Evaluate every registered command for a user in a given context.
+
+    Returns a dict with:
+    - ``user_id``, ``channel_id``, ``category_id``
+    - ``user_roles``: list of custom Slickey role IDs the user holds
+    - ``results``: list of ``{command, display_name, category, access,
+      allowed, reason, matched_rule_id, trace}`` for each command
+    - ``summary``: ``{allowed, denied, default}`` counts
+
+    This is the backend for the permission simulator / "why" explainer.
+    """
+    if pool is None:
+        return {"user_id": user_id, "channel_id": channel_id,
+                "category_id": category_id, "user_roles": [],
+                "results": [], "summary": {"allowed": 0, "denied": 0, "default": 0}}
+
+    # Fetch the user's custom Slickey roles for display.
+    async with pool.acquire() as conn:
+        role_rows = await conn.fetch(
+            "SELECT r.id, r.name, r.rank FROM bot_permission_roles r"
+            " JOIN bot_role_memberships m ON m.role_id = r.id"
+            " WHERE m.guild_id = $1 AND m.user_id = $2"
+            " ORDER BY r.rank DESC, r.name",
+            guild_id, user_id,
+        )
+    user_roles = [{"id": row["id"], "name": row["name"], "rank": row["rank"]} for row in role_rows]
+
+    # Build the list of commands to evaluate.  Use the catalog if populated;
+    # fall back to the in-memory COMMAND_REGISTRY.
+    async with pool.acquire() as conn:
+        catalog = await conn.fetch(
+            "SELECT DISTINCT permission_key, display_name, category, default_access"
+            " FROM bot_command_catalog ORDER BY category, display_name",
+        )
+    if not catalog:
+        catalog = [
+            {"permission_key": f"command.{name}", "display_name": command_display_name(name),
+             "category": cat, "default_access": acc}
+            for name, (cat, acc) in sorted(COMMAND_REGISTRY.items())
+        ]
+
+    results: list[dict[str, Any]] = []
+    allowed_count = 0
+    denied_count = 0
+    default_count = 0
+
+    for entry in catalog:
+        perm_key = entry["permission_key"]
+        cmd_name = perm_key.removeprefix("command.")
+        decision = await evaluate(
+            pool, guild_id=guild_id, user_id=user_id, guild_owner_id=guild_owner_id,
+            command_name=cmd_name, channel_id=channel_id, category_id=category_id,
+        )
+        # Classify the outcome.
+        outcome = "allowed" if decision.allowed else "denied"
+        if decision.matched_rule_id is None and not decision.allowed:
+            outcome = "default"
+            default_count += 1
+        elif decision.allowed:
+            allowed_count += 1
+        else:
+            denied_count += 1
+
+        results.append({
+            "command": cmd_name,
+            "display_name": entry["display_name"],
+            "category": entry["category"],
+            "access": entry["default_access"],
+            "allowed": decision.allowed,
+            "outcome": outcome,
+            "reason": decision.reason,
+            "matched_rule_id": decision.matched_rule_id,
+            "trace": list(decision.trace),
+        })
+
+    return {
+        "user_id": user_id,
+        "channel_id": channel_id,
+        "category_id": category_id,
+        "user_roles": user_roles,
+        "results": results,
+        "summary": {"allowed": allowed_count, "denied": denied_count, "default": default_count},
+    }
+
+
 async def actor_can_administer_policy(
     pool, *, guild_id: int, user_id: int, guild_owner_id: Optional[int], action: str,
     scope_type: str = "guild", scope_id: Optional[int] = None,
@@ -768,6 +1135,10 @@ async def permission_key_is_registered(pool, permission_key: str) -> bool:
     """Allow only catalogue-backed keys plus intentional global wildcards."""
     key = permission_key.lower().strip()
     if key in {"*", "command.*", "category.*"}:
+        return True
+    # Legacy ``command.dashboard`` is accepted on the way in and rewritten to
+    # ``policy.dashboard.access`` before the rule is persisted.
+    if key == LEGACY_DASHBOARD_ALIAS:
         return True
     if key.startswith("policy.") and key.endswith(".*"):
         return any(definition.key.startswith(key[:-1]) for definition in BUILTIN_PERMISSION_DEFINITIONS)
@@ -914,8 +1285,8 @@ class PermissionsCog(commands.Cog):
         if not await self._can_manage_member(interaction, member):
             return
         await self.pool_getter().execute(
-            """INSERT INTO bot_role_memberships (guild_id, role_id, user_id, assigned_by)
-               VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING""",
+            """INSERT INTO bot_role_memberships (guild_id, role_id, user_id, assigned_by, source)
+               VALUES ($1, $2, $3, $4, 'manual') ON CONFLICT DO NOTHING""",
             interaction.guild.id, role_id, member.id, interaction.user.id,
         )
         await self._audit(interaction, "role.assign", {"role_id": role_id, "user_id": member.id})
@@ -947,6 +1318,7 @@ class PermissionsCog(commands.Cog):
                        effect: app_commands.Choice[str], scope_type: app_commands.Choice[str], subject_id: Optional[str] = None,
                        scope_id: Optional[str] = None, confirm_broad_deny: bool = False):
         permission = permission.lower().strip()
+        permission = canonical_policy_key(permission)
         if permission.startswith("command.") and permission != "command.*":
             permission = f"command.{canonical_command_name(permission.removeprefix('command.'))}"
         if not permission or len(permission) > 150 or any(char.isspace() for char in permission):
@@ -1077,10 +1449,16 @@ class PermissionsCog(commands.Cog):
         verdict = "Allowed" if decision.allowed else "Denied"
         await interaction.response.send_message(f"**{verdict}** for {member.mention}: {decision.reason}.", ephemeral=True)
 
-    async def _audit(self, interaction: discord.Interaction, action: str, payload: dict) -> None:
+    async def _audit(self, interaction: discord.Interaction, action: str, payload: dict,
+                      *, before: dict | None = None, after: dict | None = None) -> None:
         await self.pool_getter().execute(
-            "INSERT INTO bot_permission_audit_log (guild_id, actor_id, action, payload) VALUES ($1, $2, $3, $4::jsonb)",
-            interaction.guild.id, interaction.user.id, action, __import__("json").dumps(payload),
+            """INSERT INTO bot_permission_audit_log
+               (guild_id, actor_id, actor_name, action, payload, before_state, after_state)
+               VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)""",
+            interaction.guild.id, interaction.user.id, str(interaction.user), action,
+            __import__("json").dumps(payload),
+            __import__("json").dumps(before) if before else None,
+            __import__("json").dumps(after) if after else None,
         )
 
 
