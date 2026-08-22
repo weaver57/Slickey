@@ -436,6 +436,43 @@ async def on_member_update(before, after):
                 if channel:
                     await channel.send(embed=embed)
 
+    # ── Discord role → Slickey role sync ──
+    try:
+        added_ids = [r.id for r in after.roles if r not in before.roles]
+        removed_ids = [r.id for r in before.roles if r not in after.roles]
+        if added_ids or removed_ids:
+            result = await permission_system.process_discord_role_sync(
+                utils.db_pool, guild_id=after.guild.id, user_id=after.id,
+                added_role_ids=added_ids, removed_role_ids=removed_ids,
+            )
+            if result["assigned"] or result["removed"]:
+                parts = []
+                if result["assigned"]:
+                    names = []
+                    for rid in result["assigned"]:
+                        name = await utils.db_pool.fetchval(
+                            "SELECT name FROM bot_permission_roles WHERE guild_id=$1 AND id=$2",
+                            after.guild.id, rid,
+                        )
+                        if name:
+                            names.append(name)
+                    if names:
+                        parts.append(f"assigned Slickey roles: {', '.join(names)}")
+                if result["removed"]:
+                    names = []
+                    for rid in result["removed"]:
+                        name = await utils.db_pool.fetchval(
+                            "SELECT name FROM bot_permission_roles WHERE guild_id=$1 AND id=$2",
+                            after.guild.id, rid,
+                        )
+                        if name:
+                            names.append(name)
+                    if names:
+                        parts.append(f"removed Slickey roles: {', '.join(names)}")
+                print(f"Role sync for {after.display_name} in {after.guild.name}: {'; '.join(parts)}")
+    except Exception as e:
+        print(f"Role sync error for {after.display_name} in {after.guild.name}: {e}")
+
 
 @bot.event # This function is done with postgres modification.
 async def on_member_unban(guild, member):
