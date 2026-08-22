@@ -492,6 +492,24 @@ async def on_member_join(member):
 
         print(f"User {member.id} - {member.display_name} initialized in guild {guild.name}.")
 
+    # Auto-assign Slickey custom roles configured for new members.
+    try:
+        assigned = await permission_system.apply_auto_assign_roles(
+            utils.db_pool, guild_id=guild.id, user_id=member.id,
+        )
+        if assigned:
+            role_names = []
+            for rid in assigned:
+                role = await utils.db_pool.fetchval(
+                    "SELECT name FROM bot_permission_roles WHERE guild_id=$1 AND id=$2",
+                    guild.id, rid,
+                )
+                if role:
+                    role_names.append(role)
+            if role_names:
+                print(f"Auto-assigned roles {', '.join(role_names)} to {member.display_name} in {guild.name}.")
+    except Exception as e:
+        print(f"Auto-assign failed for {member.display_name} in {guild.name}: {e}")
 
 
 @bot.event  # This function is done with postgres modification.
