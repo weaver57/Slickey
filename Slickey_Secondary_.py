@@ -1,5 +1,3 @@
-from flask import ctx
-
 from discord.ext import commands
 from discord import app_commands, AllowedMentions
 import asyncio

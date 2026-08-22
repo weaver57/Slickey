@@ -155,11 +155,6 @@ def current_hour():
 
 @bot.event # This function is done with postgres modification.
 async def on_message(message):
-    global replied_to_message
-    #global db_pool
-    #if db_pool is None:
-        #await init_db_pool()
-
     if message.author.bot:
         return
 
@@ -314,7 +309,7 @@ async def on_message(message):
             await asyncio.sleep(delay)
             try:
                 await msg.delete()
-            except:
+            except Exception:
                 pass
 
         # kick off the task without awaiting it
@@ -764,7 +759,7 @@ async def setup(interaction: discord.Interaction):
     #master_conn = await get_masterslave_connection()
     #conn = await get_db_connection()
 
-    owner_id = guild.owner.id
+    owner_id = guild.owner_id
 
     await interaction.followup.send("Creating required roles...", ephemeral=True)
     for role_name in ["Kick", "Mute", "Ban"]:
@@ -5321,8 +5316,6 @@ class GameView(discord.ui.View):
     async def shoot_self(self, interaction: discord.Interaction, button: discord.ui.Button):
         global operation_active
         if not operation_active:
-            operation_active = True
-
             await interaction.followup.send("Buckshot Roulette command halted by stop command.", ephemeral=False)
             return
         if interaction.user.id != self.game_state["turn"]:
@@ -5350,7 +5343,6 @@ class GameView(discord.ui.View):
     @discord.ui.button(label="Shoot Opponent", style=discord.ButtonStyle.primary)
     async def shoot_opponent(self, interaction: discord.Interaction, button: discord.ui.Button):
         global operation_active
-        operation_active = True
         if not operation_active:
             await interaction.followup.send("Buckshot Roulette command halted by stop command.", ephemeral=False)
             return
@@ -5380,7 +5372,6 @@ class GameView(discord.ui.View):
     @discord.ui.button(label="Use Card", style=discord.ButtonStyle.secondary)
     async def use_card(self, interaction: discord.Interaction, button: discord.ui.Button):
         global operation_active
-        operation_active = True
         if not operation_active:
             await interaction.followup.send("Buckshot Roulette command halted by stop command.", ephemeral=False)
             return
@@ -5392,7 +5383,6 @@ class GameView(discord.ui.View):
     @discord.ui.button(label="Forfeit", style=discord.ButtonStyle.red)
     async def forfeit(self, interaction: discord.Interaction, button: discord.ui.Button):
         global operation_active
-        operation_active = True
         if not operation_active:
             await interaction.followup.send("Buckshot Roulette command halted by stop command.", ephemeral=False)
             return
