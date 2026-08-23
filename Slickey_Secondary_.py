@@ -729,26 +729,19 @@ async def get_gifs(tag: str, nsfw: bool = False, pairing: str | None = None):
 # --- Hybrid GIF action factory (works as both !action and /action) ---
 
 def make_hybrid_action(action: str):
-    @commands.hybrid_command(name=action, aliases=GIFUKAI_ALIASES.get(action, []), description=f"Gives out a {action.capitalize()} GIF.", help=f"Gives out a {action.capitalize()} GIF.\n**Syntax**: {action} @user")
+    # --- Text-only command (no slash variant) ---
+    @commands.command(name=action, aliases=GIFUKAI_ALIASES.get(action, []), help=f"Gives out a {action.capitalize()} GIF.\n**Syntax**: {action} @user")
     @commands.cooldown(1, 6, commands.BucketType.user)
-    async def _hybrid_cmd(ctx: commands.Context, member: str = None):
+    async def _text_cmd(ctx: commands.Context, *, member: str = None):
         if await is_command_blocked(ctx.guild.id, ctx.author.id, action):
-            msg = f"You are blocked from using `{action}` command."
-            if ctx.interaction:
-                await ctx.send(msg, ephemeral=True)
-            else:
-                await ctx.reply(msg)
+            await ctx.reply(f"You are blocked from using `{action}` command.")
             return
 
         # Resolve the target member
         target_member = None
         selff = False
 
-        if ctx.interaction and member is not None and isinstance(member, discord.Member):
-            # Slash command: discord.py auto-converts the parameter
-            target_member = member
-        elif member and isinstance(member, str):
-            # Text command: parse string to member
+        if member:
             try:
                 target_member = await commands.MemberConverter().convert(ctx, member)
             except commands.MemberNotFound:
@@ -766,11 +759,7 @@ def make_hybrid_action(action: str):
                 if matched_member and confidence > 70:
                     target_member = matched_member
                 else:
-                    msg = f"Could not find a user matching '{member}'."
-                    if ctx.interaction:
-                        await ctx.send(msg, ephemeral=True)
-                    else:
-                        await ctx.reply(msg)
+                    await ctx.reply(f"Could not find a user matching '{member}'.")
                     return
 
         if not target_member:
@@ -781,11 +770,7 @@ def make_hybrid_action(action: str):
 
         url = await get_gifs(action)
         if not url or not is_valid_url(url):
-            msg = f"❌ Couldn't fetch a {action} gif."
-            if ctx.interaction:
-                await ctx.send(msg, ephemeral=True)
-            else:
-                await ctx.reply(msg)
+            await ctx.reply(f"❌ Couldn't fetch a {action} gif.")
             return
 
         # Record and counts
@@ -812,22 +797,14 @@ def make_hybrid_action(action: str):
         emb.set_footer(text=footer)
         await ctx.send(embed=emb)
 
-    @_hybrid_cmd.error
-    async def _hybrid_on_cooldown(ctx, error):
+    @_text_cmd.error
+    async def _text_on_cooldown(ctx, error):
         if isinstance(error, commands.CommandOnCooldown):
-            msg = f"Slow down! Try again in {error.retry_after:.1f}s."
-            if ctx.interaction:
-                await ctx.send(msg, ephemeral=True)
-            else:
-                await ctx.reply(msg, delete_after=error.retry_after)
+            await ctx.reply(f"Slow down! Try again in {error.retry_after:.1f}s.", delete_after=error.retry_after)
         else:
-            msg = f"An unexpected error occurred: {error}"
-            if ctx.interaction:
-                await ctx.send(msg, ephemeral=True)
-            else:
-                await ctx.reply(msg)
-    _hybrid_cmd.__name__ = action
-    return _hybrid_cmd
+            await ctx.reply(f"An unexpected error occurred: {error}")
+    _text_cmd.__name__ = action
+    return _text_cmd
 
 
 HIBRID_ACTION_COMMANDS = [make_hybrid_action(act) for act in ACTIONS]
